@@ -38,6 +38,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [assinaturas, setAssinaturas] = useState([]);
+  const [investimentos, setInvestimentos] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [aba, setAba] = useState("painel");
@@ -46,23 +47,26 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   async function carregarTudo() {
     setCarregando(true); setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
         supabase.from("cartoes_credito").select("*").eq("familia_id", membro.familia_id).order("nome"),
         supabase.from("assinaturas").select("*").eq("familia_id", membro.familia_id).order("dia_cobranca"),
+        supabase.from("investimentos").select("*").eq("familia_id", membro.familia_id),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
       if (e3) throw e3;
       if (e4) throw e4;
       if (e5) throw e5;
+      if (e6) throw e6;
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
       setCartoes(crt || []);
       setAssinaturas(assn || []);
+      setInvestimentos(inv || []);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
@@ -95,7 +99,11 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       ) : (
         <>
           {aba === "painel" && (
-            <Painel membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} onNavegar={irPara} onSalvo={carregarTudo} />
+            <Painel
+              membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
+              onNavegar={irPara} onSalvo={carregarTudo}
+              onMembroAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }}
+            />
           )}
 
           {aba === "receitas" && (
@@ -133,7 +141,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, onMembroAtu
   if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} />;
   if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "importar") return <ImportarArquivo membro={membro} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
-  if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
+  if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
 
   const itens = [
     { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
@@ -176,31 +184,45 @@ function BarraInferior({ aba, onEscolher }) {
   );
 }
 
-function GerenciarMembros({ membros, membroLogado, onAtualizado, onVoltar }) {
+function GerenciarMembros({ membros, membroLogado, contas, cartoes, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
 
   return (
     <div style={cardStyle}>
       {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>‹ Voltar</button>}
       <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 12 }}>MEMBROS DA FAMÍLIA</div>
-      {membros.map((m) => <MembroCard key={m.id} membro={m} souEu={m.id === membroLogado.id} onAtualizado={onAtualizado} />)}
+      {membros.map((m) => <MembroCard key={m.id} membro={m} contas={contas} cartoes={cartoes} souEu={m.id === membroLogado.id} onAtualizado={onAtualizado} />)}
       {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro (convidar por e-mail)</button>}
       {mostrarForm && <AdicionarMembro familiaId={membroLogado.familia_id} onSalvo={() => { setMostrarForm(false); onAtualizado(); }} onCancelar={() => setMostrarForm(false)} />}
     </div>
   );
 }
 
-function MembroCard({ membro, souEu, onAtualizado }) {
+// A visibilidade de cada conta/cartão pra quem tem acesso restrito
+// (visivel_para_restrito) é uma propriedade da PRÓPRIA conta/cartão no
+// banco, não um vínculo por pessoa — então, embora essa edição fique
+// dentro do cartão de cada membro (pra ficar junto das permissões dela),
+// hoje ela vale igual pra qualquer membro com acesso restrito que exista
+// na família (só a Alessia, por enquanto).
+function MembroCard({ membro, contas, cartoes, souEu, onAtualizado }) {
   const [editando, setEditando] = useState(false);
   const [mesada, setMesada] = useState(membro.mesada_mensal || 0);
   const [perm, setPerm] = useState(membro.permissoes || {});
+  const [visContas, setVisContas] = useState(() => Object.fromEntries(contas.map((c) => [c.id, !!c.visivel_para_restrito])));
+  const [visCartoes, setVisCartoes] = useState(() => Object.fromEntries(cartoes.map((c) => [c.id, !!c.visivel_para_restrito])));
   const [salvando, setSalvando] = useState(false);
 
   async function salvar() {
     setSalvando(true);
     try {
-      const { error } = await supabase.from("membros").update({ mesada_mensal: Number(mesada), permissoes: perm }).eq("id", membro.id);
-      if (error) throw error;
+      const tarefas = [
+        supabase.from("membros").update({ mesada_mensal: Number(mesada), permissoes: perm }).eq("id", membro.id),
+        ...contas.map((c) => supabase.from("contas").update({ visivel_para_restrito: !!visContas[c.id] }).eq("id", c.id)),
+        ...cartoes.map((c) => supabase.from("cartoes_credito").update({ visivel_para_restrito: !!visCartoes[c.id] }).eq("id", c.id)),
+      ];
+      const resultados = await Promise.all(tarefas);
+      const comErro = resultados.find((r) => r.error);
+      if (comErro) throw comErro.error;
       setEditando(false);
       onAtualizado();
     } catch (e) {
@@ -233,6 +255,28 @@ function MembroCard({ membro, souEu, onAtualizado }) {
               {label}
             </label>
           ))}
+
+          {(contas.length > 0 || cartoes.length > 0) && (
+            <div style={{ marginTop: 10, marginBottom: 4 }}>
+              <label style={{ fontSize: 12.5, color: C.inkMute, display: "block", marginBottom: 6 }}>Contas e cartões que ela pode ver</label>
+              {contas.map((c) => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: C.ink, marginBottom: 6 }}>
+                  <input type="checkbox" checked={!!visContas[c.id]} onChange={(e) => setVisContas({ ...visContas, [c.id]: e.target.checked })} />
+                  {c.nome}{c.titular ? ` (${c.titular})` : ""}
+                </label>
+              ))}
+              {cartoes.map((c) => (
+                <label key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: C.ink, marginBottom: 6 }}>
+                  <input type="checkbox" checked={!!visCartoes[c.id]} onChange={(e) => setVisCartoes({ ...visCartoes, [c.id]: e.target.checked })} />
+                  {c.nome}{c.titular ? ` (${c.titular})` : ""}
+                </label>
+              ))}
+              <div style={{ fontSize: 11, color: C.inkFaint, marginTop: 2 }}>
+                Vale pra qualquer pessoa com acesso restrito na família — hoje só a Alessia.
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
             <button style={btn} onClick={salvar} disabled={salvando}>{salvando ? "Salvando…" : "Salvar"}</button>
             <button style={btnGhost} onClick={() => setEditando(false)}>Cancelar</button>

@@ -30,6 +30,8 @@ export function IconClose(p) { return <Svg {...p}><line x1="6" y1="6" x2="18" y2
 export function IconChevronRight(p) { return <Svg {...p}><polyline points="9 18 15 12 9 6" /></Svg>; }
 export function IconChevronLeft(p) { return <Svg {...p}><polyline points="15 18 9 12 15 6" /></Svg>; }
 export function IconChevronDown(p) { return <Svg {...p}><polyline points="6 9 12 15 18 9" /></Svg>; }
+export function IconChevronUp(p) { return <Svg {...p}><polyline points="6 15 12 9 18 15" /></Svg>; }
+export function IconSettings(p) { return <Svg {...p}><circle cx="12" cy="12" r="3.2" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" /></Svg>; }
 export function IconCheck(p) { return <Svg {...p}><polyline points="20 6 9 17 4 12" /></Svg>; }
 export function IconClock(p) { return <Svg {...p}><circle cx="12" cy="12" r="9" /><polyline points="12 7 12 12 15 14" /></Svg>; }
 export function IconAlertTriangle(p) { return <Svg {...p}><path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.9 2 18a1.8 1.8 0 0 0 1.6 2.7h16.8A1.8 1.8 0 0 0 22 18L13.7 3.9a1.8 1.8 0 0 0-3.4 0Z" /></Svg>; }

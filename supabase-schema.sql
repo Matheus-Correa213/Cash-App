@@ -24,6 +24,7 @@ create table if not exists membros (
   papel text not null check (papel in ('dono', 'restrito')),
   mesada_mensal numeric(12,2) default 0,
   permissoes jsonb not null default '{"ver_saldo_geral": false, "ver_gastos_dono": false, "ver_resumo_categorias": false}'::jsonb,
+  preferencias_painel jsonb,
   created_at timestamptz not null default now(),
   unique (user_id)
 );

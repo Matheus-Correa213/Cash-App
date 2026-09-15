@@ -1,7 +1,21 @@
 import React, { useMemo, useState } from "react";
+import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
-import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight } from "./Icons.jsx";
+import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight, IconChevronUp, IconChevronDown, IconSettings, IconTrendingUp } from "./Icons.jsx";
+
+// Catálogo de tudo que PODE aparecer em "Seus widgets" — cada pessoa escolhe
+// quais entram e em que ordem (gravado em membros.preferencias_painel).
+// Quando essa coluna está vazia (ninguém personalizou ainda), usamos
+// PADRAO_WIDGETS, que reproduz exatamente o painel de antes dessa mudança —
+// ninguém perde nada até tocar na engrenagem.
+const CATALOGO_WIDGETS = [
+  { tipo: "cartao", label: "Cartão de crédito" },
+  { tipo: "assinaturas", label: "Assinaturas" },
+  { tipo: "investimentos", label: "Investimentos" },
+  { tipo: "insight", label: "Percebido pelo COSMO" },
+];
+const PADRAO_WIDGETS = [{ tipo: "cartao" }, { tipo: "assinaturas" }, { tipo: "insight" }];
 
 // Painel principal — redesenhado pra ser só um resumo (saldo do casal), duas
 // ações principais (lançar ou falar com o COSMO), atalhos, e uma seção de
@@ -29,8 +43,9 @@ function saudacao() {
   return "Boa noite";
 }
 
-export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, onNavegar, onSalvo }) {
+export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, onNavegar, onSalvo, onMembroAtualizado }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
+  const [personalizando, setPersonalizando] = useState(false);
 
   const doMes = useMemo(() => lancamentos.filter((l) => l.data >= inicioMesISO()), [lancamentos]);
   const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
@@ -38,17 +53,24 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
   const saldo = totalReceitas - totalGastos;
   const primeiroNome = (membro?.nome || "").split(" ")[0];
 
-  const cartaoPrincipal = cartoes[0];
-  const abertoCartaoPrincipal = useMemo(() => {
-    if (!cartaoPrincipal) return 0;
-    return lancamentos.filter((l) => l.cartao_id === cartaoPrincipal.id && !l.fatura_paga && l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0);
-  }, [lancamentos, cartaoPrincipal]);
-  const instCartao = cartaoPrincipal ? instituicaoDe(cartaoPrincipal.bandeira || cartaoPrincipal.nome) : null;
-  const disponivelCartao = cartaoPrincipal?.limite != null ? Math.max(0, cartaoPrincipal.limite - abertoCartaoPrincipal) : null;
-
   const assinaturasAtivas = (assinaturas || []).filter((a) => a.ativo);
   const totalAssinaturas = assinaturasAtivas.reduce((s, a) => s + Number(a.valor), 0);
   const proximaAssinatura = assinaturasAtivas.slice().sort((a, b) => a.dia_cobranca - b.dia_cobranca)[0];
+
+  const totalAportadoInv = (investimentos || []).reduce((s, i) => s + Number(i.valor_aportado), 0);
+  const totalAtualInv = (investimentos || []).reduce((s, i) => s + Number(i.valor_atual), 0);
+  const ganhoInv = totalAtualInv - totalAportadoInv;
+
+  // Quais widgets aparecem e em que ordem — vem de membro.preferencias_painel
+  // (salvo pelo painel de "Personalizar"), ou do padrão de sempre enquanto
+  // ninguém mexeu nisso ainda.
+  const preferenciasWidgets = membro?.preferencias_painel?.length ? membro.preferencias_painel : PADRAO_WIDGETS;
+
+  async function salvarPreferenciasWidgets(novaLista) {
+    const { error } = await supabase.from("membros").update({ preferencias_painel: novaLista }).eq("id", membro.id);
+    if (error) { alert(error.message); return; }
+    onMembroAtualizado && onMembroAtualizado();
+  }
 
   // Insight simples e honesto: compara os últimos 7 dias com os 7 dias
   // anteriores na frente "dia_a_dia". Não é IA de verdade — é um cálculo na
@@ -126,51 +148,188 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Seus widgets</div>
-          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint }}>toque para reordenar</div>
+          <button onClick={() => setPersonalizando((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: C.inkFaint, cursor: "pointer", padding: 2 }}>
+            <IconSettings size={14} color={C.inkFaint} strokeWidth={1.9} />
+            <span style={{ fontSize: 10.5, fontWeight: 700 }}>{personalizando ? "fechar" : "personalizar"}</span>
+          </button>
         </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
-          {cartaoPrincipal && (
-            <button onClick={() => onNavegar(`cartao:${cartaoPrincipal.id}`)} style={{ ...widgetBase, position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${instCartao.cor} 0%, ${instCartao.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
-              <div style={{ position: "absolute", width: 100, height: 100, borderRadius: "50%", background: "#fff", opacity: 0.08, filter: "blur(24px)", top: -30, right: -20 }} />
-              <div style={{ position: "relative" }}>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.65)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{cartaoPrincipal.nome}</div>
-                <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{moeda(abertoCartaoPrincipal)}</div>
-                {disponivelCartao != null && (
-                  <div style={{ fontSize: 10.5, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
-                    Disponível {moeda(disponivelCartao)}{cartaoPrincipal.dia_fechamento ? ` · fecha dia ${cartaoPrincipal.dia_fechamento}` : ""}
-                  </div>
-                )}
-              </div>
-              <IconChevronRight size={15} color="rgba(255,255,255,0.7)" strokeWidth={2.3} style={{ position: "relative", flexShrink: 0 }} />
-            </button>
-          )}
+        {personalizando ? (
+          <PersonalizarWidgets
+            preferencias={preferenciasWidgets}
+            cartoes={cartoes}
+            onSalvar={async (nova) => { await salvarPreferenciasWidgets(nova); setPersonalizando(false); }}
+            onFechar={() => setPersonalizando(false)}
+          />
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            {preferenciasWidgets.map((w, i) => {
+              if (w.tipo === "cartao") {
+                const cartao = (w.cartao_id && cartoes.find((c) => c.id === w.cartao_id)) || cartoes[0];
+                if (!cartao) return null;
+                return <WidgetCartao key={i} cartao={cartao} lancamentos={lancamentos} onNavegar={onNavegar} />;
+              }
+              if (w.tipo === "assinaturas") {
+                if (assinaturasAtivas.length === 0) return null;
+                return <WidgetAssinaturas key={i} ativas={assinaturasAtivas} total={totalAssinaturas} proxima={proximaAssinatura} onNavegar={onNavegar} />;
+              }
+              if (w.tipo === "investimentos") {
+                if (!investimentos || investimentos.length === 0) return null;
+                return <WidgetInvestimentos key={i} totalAtual={totalAtualInv} ganho={ganhoInv} onNavegar={onNavegar} />;
+              }
+              if (w.tipo === "insight") {
+                if (!insight) return null;
+                return <WidgetInsight key={i} insight={insight} />;
+              }
+              return null;
+            })}
+            {preferenciasWidgets.length === 0 && (
+              <div style={{ fontSize: 12.5, color: C.inkFaint }}>Nenhum widget escolhido — toque em "personalizar" pra adicionar.</div>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
 
-          {assinaturasAtivas.length > 0 && (
-            <button onClick={() => onNavegar("assinaturas")} style={{ ...widgetBase, background: "#fff", border: `1px solid ${C.line}`, cursor: "pointer", textAlign: "left" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <div style={{ width: 38, height: 38, borderRadius: 11, background: C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <IconRefresh size={18} color={C.purple} strokeWidth={1.9} />
-                </div>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Assinaturas</div>
-                  <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{assinaturasAtivas.length} ativas{proximaAssinatura ? ` · próxima dia ${proximaAssinatura.dia_cobranca}` : ""}</div>
-                </div>
-              </div>
-              <span style={{ fontSize: 14, fontWeight: 800, color: C.purple }}>{moeda(totalAssinaturas)}/mês</span>
-            </button>
-          )}
+function WidgetCartao({ cartao, lancamentos, onNavegar }) {
+  const aberto = useMemo(
+    () => lancamentos.filter((l) => l.cartao_id === cartao.id && !l.fatura_paga && l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0),
+    [lancamentos, cartao]
+  );
+  const inst = instituicaoDe(cartao.bandeira || cartao.nome);
+  const disponivel = cartao.limite != null ? Math.max(0, cartao.limite - aberto) : null;
+  return (
+    <button onClick={() => onNavegar(`cartao:${cartao.id}`)} style={{ ...widgetBase, position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
+      <div style={{ position: "absolute", width: 100, height: 100, borderRadius: "50%", background: "#fff", opacity: 0.08, filter: "blur(24px)", top: -30, right: -20 }} />
+      <div style={{ position: "relative" }}>
+        <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.65)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{cartao.nome}</div>
+        <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{moeda(aberto)}</div>
+        {disponivel != null && (
+          <div style={{ fontSize: 10.5, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
+            Disponível {moeda(disponivel)}{cartao.dia_fechamento ? ` · fecha dia ${cartao.dia_fechamento}` : ""}
+          </div>
+        )}
+      </div>
+      <IconChevronRight size={15} color="rgba(255,255,255,0.7)" strokeWidth={2.3} style={{ position: "relative", flexShrink: 0 }} />
+    </button>
+  );
+}
 
-          {insight && (
-            <div style={{ display: "flex", gap: 11, background: C.navy, borderRadius: 16, padding: "14px 16px", alignItems: "flex-start" }}>
-              <IconCosmo size={18} color={C.gold} strokeWidth={1.9} style={{ flexShrink: 0, marginTop: 1 }} />
-              <div>
-                <div style={{ fontSize: 11.5, fontWeight: 800, color: C.gold, marginBottom: 2 }}>Percebido pelo COSMO</div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>{insight}</div>
-              </div>
+function WidgetAssinaturas({ ativas, total, proxima, onNavegar }) {
+  return (
+    <button onClick={() => onNavegar("assinaturas")} style={{ ...widgetBase, background: "#fff", border: `1px solid ${C.line}`, cursor: "pointer", textAlign: "left" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 38, height: 38, borderRadius: 11, background: C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <IconRefresh size={18} color={C.purple} strokeWidth={1.9} />
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Assinaturas</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{ativas.length} ativas{proxima ? ` · próxima dia ${proxima.dia_cobranca}` : ""}</div>
+        </div>
+      </div>
+      <span style={{ fontSize: 14, fontWeight: 800, color: C.purple }}>{moeda(total)}/mês</span>
+    </button>
+  );
+}
+
+function WidgetInvestimentos({ totalAtual, ganho, onNavegar }) {
+  return (
+    <button onClick={() => onNavegar("investimentos")} style={{ ...widgetBase, background: "#fff", border: `1px solid ${C.line}`, cursor: "pointer", textAlign: "left" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{ width: 38, height: 38, borderRadius: 11, background: C.greenSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <IconTrendingUp size={18} color={C.green} strokeWidth={1.9} />
+        </div>
+        <div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Investimentos</div>
+          <div style={{ fontSize: 11, fontWeight: 600, color: ganho >= 0 ? C.accent : C.danger }}>{ganho >= 0 ? "+" : ""}{moeda(ganho)}</div>
+        </div>
+      </div>
+      <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(totalAtual)}</span>
+    </button>
+  );
+}
+
+function WidgetInsight({ insight }) {
+  return (
+    <div style={{ display: "flex", gap: 11, background: C.navy, borderRadius: 16, padding: "14px 16px", alignItems: "flex-start" }}>
+      <IconCosmo size={18} color={C.gold} strokeWidth={1.9} style={{ flexShrink: 0, marginTop: 1 }} />
+      <div>
+        <div style={{ fontSize: 11.5, fontWeight: 800, color: C.gold, marginBottom: 2 }}>Percebido pelo COSMO</div>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>{insight}</div>
+      </div>
+    </div>
+  );
+}
+
+// Painel de "personalizar": lista todo o catálogo (ativos primeiro, na ordem
+// salva, depois o resto), com checkbox pra ligar/desligar e setas pra
+// reordenar só entre os ativos. Salva como uma lista só com os ativos, na
+// ordem final — é exatamente isso que Painel usa pra renderizar.
+function PersonalizarWidgets({ preferencias, cartoes, onSalvar, onFechar }) {
+  const [lista, setLista] = useState(() => {
+    const ativos = CATALOGO_WIDGETS.filter((cat) => preferencias.some((p) => p.tipo === cat.tipo))
+      .sort((a, b) => preferencias.findIndex((p) => p.tipo === a.tipo) - preferencias.findIndex((p) => p.tipo === b.tipo));
+    const inativos = CATALOGO_WIDGETS.filter((cat) => !preferencias.some((p) => p.tipo === cat.tipo));
+    return [...ativos, ...inativos].map((cat) => {
+      const existente = preferencias.find((p) => p.tipo === cat.tipo);
+      return { tipo: cat.tipo, label: cat.label, ativo: !!existente, cartao_id: existente?.cartao_id || "" };
+    });
+  });
+  const [salvando, setSalvando] = useState(false);
+
+  function alternar(tipo) {
+    setLista((l) => l.map((w) => (w.tipo === tipo ? { ...w, ativo: !w.ativo } : w)));
+  }
+  function escolherCartao(tipo, id) {
+    setLista((l) => l.map((w) => (w.tipo === tipo ? { ...w, cartao_id: id } : w)));
+  }
+  function mover(tipo, direcao) {
+    setLista((l) => {
+      const idx = l.findIndex((w) => w.tipo === tipo);
+      let alvo = idx + direcao;
+      while (alvo >= 0 && alvo < l.length && !l[alvo].ativo) alvo += direcao;
+      if (alvo < 0 || alvo >= l.length) return l;
+      const nova = l.slice();
+      [nova[idx], nova[alvo]] = [nova[alvo], nova[idx]];
+      return nova;
+    });
+  }
+
+  async function salvar() {
+    setSalvando(true);
+    const ativos = lista.filter((w) => w.ativo).map((w) => (w.tipo === "cartao" && w.cartao_id ? { tipo: w.tipo, cartao_id: w.cartao_id } : { tipo: w.tipo }));
+    await onSalvar(ativos);
+    setSalvando(false);
+  }
+
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: 16 }}>
+      <div style={{ fontSize: 11.5, color: C.inkFaint, marginBottom: 12 }}>Marque o que aparece no seu painel. As setas mudam a ordem.</div>
+      {lista.map((w) => (
+        <div key={w.tipo} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+          <input type="checkbox" checked={w.ativo} onChange={() => alternar(w.tipo)} />
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{w.label}</div>
+            {w.tipo === "cartao" && w.ativo && cartoes.length > 1 && (
+              <select value={w.cartao_id || ""} onChange={(e) => escolherCartao("cartao", e.target.value)} style={{ marginTop: 4, fontSize: 12.5, padding: "5px 8px", borderRadius: 8, border: `1px solid ${C.line}` }}>
+                <option value="">Cartão principal (o primeiro)</option>
+                {cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+              </select>
+            )}
+          </div>
+          {w.ativo && (
+            <div style={{ display: "flex", gap: 2 }}>
+              <button type="button" onClick={() => mover(w.tipo, -1)} style={setaBtn}><IconChevronUp size={14} color={C.inkMute} strokeWidth={2.2} /></button>
+              <button type="button" onClick={() => mover(w.tipo, 1)} style={setaBtn}><IconChevronDown size={14} color={C.inkMute} strokeWidth={2.2} /></button>
             </div>
           )}
         </div>
+      ))}
+      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+        <button onClick={salvar} disabled={salvando} style={{ padding: "9px 16px", borderRadius: 9, border: "none", background: C.accent, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>{salvando ? "Salvando…" : "Salvar"}</button>
+        <button onClick={onFechar} style={{ padding: "9px 16px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
       </div>
     </div>
   );
@@ -190,3 +349,4 @@ function botaoPrincipal(bg, cor, borda) {
 }
 
 const widgetBase = { borderRadius: 16, padding: "15px 16px", display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" };
+const setaBtn = { width: 26, height: 26, borderRadius: 8, border: `1px solid ${C.line}`, background: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" };
