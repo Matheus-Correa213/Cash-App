@@ -30,7 +30,7 @@ export default function AuthGate() {
     return (
       <div style={wrap}>
         <div style={card}>
-          <div style={title}>Cash App</div>
+          <div style={title}>Correa Cash</div>
           <div style={subtitle}>
             Este app ainda não está conectado a um banco de dados. Configure
             VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY nas variáveis de
@@ -78,7 +78,7 @@ function LoginForm() {
   return (
     <div style={wrap}>
       <form style={card} onSubmit={submeter}>
-        <div style={title}>Cash App</div>
+        <div style={title}>Correa Cash</div>
         <div style={subtitle}>Finanças do casal — Correa Tech</div>
         {erro && <div style={errBox}>{erro}</div>}
         {aviso && <div style={{ ...errBox, background: C.accentSoft, color: C.accent }}>{aviso}</div>}
@@ -182,7 +182,7 @@ function MembroGate({ session }) {
       <div style={wrap}>
         <div style={card}>
           <div style={title}>Convite encontrado</div>
-          <div style={subtitle}>Encontramos um convite para {session.user.email}. Toque abaixo para entrar na sua família no Cash App.</div>
+          <div style={subtitle}>Encontramos um convite para {session.user.email}. Toque abaixo para entrar na sua família no Correa Cash.</div>
           <button style={button} onClick={reivindicarConvite}>Entrar na família</button>
           <button type="button" style={linkBtn} onClick={sair}>Sair</button>
         </div>
@@ -229,7 +229,7 @@ function CriarFamilia({ session, onCriada, onSair }) {
   return (
     <div style={wrap}>
       <form style={card} onSubmit={criar}>
-        <div style={title}>Bem-vindo ao Cash App</div>
+        <div style={title}>Bem-vindo ao Correa Cash</div>
         <div style={subtitle}>Você é a primeira pessoa a entrar — vamos criar sua família. Depois você convida a segunda pessoa dentro do app.</div>
         {erro && <div style={errBox}>{erro}</div>}
         <input style={input} placeholder="Seu nome (ex: Matheus)" value={nome} onChange={(e) => setNome(e.target.value)} required />

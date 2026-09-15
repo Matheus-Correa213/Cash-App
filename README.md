@@ -1,4 +1,4 @@
-# Cash App — Correa Tech
+# Correa Cash — Correa Tech
 
 App de finanças do casal, separado do COSMO. Matheus administra tudo; a
 pessoa com acesso restrito (ex: Alessia) só lança os próprios gastos e vê o

@@ -12,7 +12,7 @@ export default function App({ membro, onSignOut, onMembroAtualizado }) {
     <div style={shellStyle}>
       <header style={headerStyle}>
         <div>
-          <div style={{ fontWeight: 700, fontSize: 16, color: C.ink }}>Cash App</div>
+          <div style={{ fontWeight: 700, fontSize: 16, color: C.ink }}>Correa Cash</div>
           <div style={{ fontSize: 12.5, color: C.inkFaint }}>{membro.nome} · {membro.papel === "dono" ? "administrador(a)" : "acesso restrito"}</div>
         </div>
         <button style={signOutBtn} onClick={onSignOut}>Sair</button>
