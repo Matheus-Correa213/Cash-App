@@ -18,6 +18,32 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState("");
   const inputArquivo = useRef(null);
+  const areaTexto = useRef(null);
+
+  // Textarea que cresce pra baixo conforme a pessoa escreve (até um teto,
+  // pra não tomar a tela toda), com Enter enviando e Shift+Enter quebrando
+  // linha — o padrão de qualquer chat de verdade, em vez do <input> de uma
+  // linha só que tinha antes.
+  function ajustarAltura(el) {
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.min(el.scrollHeight, 120) + "px";
+  }
+
+  function aoDigitar(e) {
+    setTexto(e.target.value);
+    ajustarAltura(e.target);
+  }
+
+  function aoTeclar(e) {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (texto.trim() && !enviando) {
+        enviar(texto.trim());
+        requestAnimationFrame(() => ajustarAltura(areaTexto.current));
+      }
+    }
+  }
 
   async function enviar(mensagemTexto, imagem) {
     setErro("");
@@ -107,17 +133,19 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       </div>
 
       <form
-        onSubmit={(e) => { e.preventDefault(); if (texto.trim()) enviar(texto.trim()); }}
-        style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderTop: `1px solid ${C.line}` }}
+        onSubmit={(e) => { e.preventDefault(); if (texto.trim()) { enviar(texto.trim()); requestAnimationFrame(() => ajustarAltura(areaTexto.current)); } }}
+        style={{ display: "flex", alignItems: "flex-end", gap: 10, padding: "10px 14px", borderTop: `1px solid ${C.line}` }}
       >
         <input ref={inputArquivo} type="file" accept="image/*" hidden onChange={onEscolherArquivo} />
         <button type="button" onClick={() => inputArquivo.current?.click()} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.line, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} title="Anexar foto">
           <IconReceiptScan size={16} color={C.inkMute} strokeWidth={1.9} />
         </button>
-        <input
-          value={texto} onChange={(e) => setTexto(e.target.value)}
-          placeholder="Fale com o COSMO ou anexe um arquivo…"
-          style={{ flex: 1, padding: "10px 16px", borderRadius: 100, border: `1px solid ${C.line}`, fontSize: 13.5 }}
+        <textarea
+          ref={areaTexto}
+          value={texto} onChange={aoDigitar} onKeyDown={aoTeclar}
+          placeholder="Fale com o COSMO ou anexe um arquivo… (Enter envia, Shift+Enter quebra linha)"
+          rows={1}
+          style={{ flex: 1, padding: "10px 16px", borderRadius: 18, border: `1px solid ${C.line}`, fontSize: 13.5, fontFamily: "inherit", resize: "none", overflowY: "auto", maxHeight: 120, lineHeight: 1.4 }}
         />
         <button type="submit" disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.accent, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
           <IconSend size={15} color="#fff" strokeWidth={2.1} />
@@ -138,7 +166,7 @@ function Bolha({ mensagem, onConfirmar }) {
             background: deUsuario ? C.accent : "#fff", color: deUsuario ? "#fff" : C.ink,
             border: deUsuario ? "none" : `1px solid ${C.line}`,
             borderRadius: deUsuario ? "16px 4px 16px 16px" : "4px 16px 16px 16px",
-            padding: "10px 14px", fontSize: 13, fontWeight: 600, lineHeight: 1.4,
+            padding: "10px 14px", fontSize: 13, fontWeight: 600, lineHeight: 1.4, whiteSpace: "pre-wrap",
           }}>
             {mensagem.texto}
           </div>

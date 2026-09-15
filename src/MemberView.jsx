@@ -1,18 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C } from "./theme.js";
+import { C, frenteDe, fonteDe } from "./theme.js";
+import NovoLancamento from "./NovoLancamento.jsx";
+import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA } from "./Icons.jsx";
 
 const wrap = { padding: 18, maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
 const h2 = { fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 12, letterSpacing: "0.02em" };
 const row = { display: "flex", gap: 10, flexWrap: "wrap" };
-const input = { flex: "1 1 120px", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14 };
-const btn = { padding: "10px 16px", borderRadius: 9, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" };
 const statBig = { fontSize: 26, fontWeight: 700, color: C.ink };
 const statLabel = { fontSize: 12, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.06em" };
 const lineItem = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.line}` };
-
-const CATEGORIAS = ["mercado", "lazer", "transporte", "saude", "roupa", "outros"];
 
 function moeda(v) { return `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`; }
 function inicioMesISO() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); }
@@ -20,10 +18,12 @@ function inicioMesISO() { const d = new Date(); d.setDate(1); return d.toISOStri
 export default function MemberView({ membro }) {
   const [lancamentos, setLancamentos] = useState([]);
   const [contas, setContas] = useState([]);
+  const [cartoes, setCartoes] = useState([]);
   const [resumoFamilia, setResumoFamilia] = useState(null);
   const [resumoCategorias, setResumoCategorias] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
+  const [lancamentoAberto, setLancamentoAberto] = useState(false);
 
   async function carregar() {
     setCarregando(true); setErro("");
@@ -34,11 +34,16 @@ export default function MemberView({ membro }) {
       if (e1) throw e1;
       setLancamentos(lanc || []);
 
-      // Ela só enxerga as contas que o Matheus deixou explicitamente visíveis
-      // (política "contas: membro ve as marcadas como visiveis" no banco) —
-      // é só pra saber de onde saiu o gasto dela, nunca a lista toda.
-      const { data: cts } = await supabase.from("contas").select("id, nome").eq("familia_id", membro.familia_id);
+      // Ela só enxerga as contas/cartões que o Matheus deixou explicitamente
+      // visíveis (políticas "membro ve as marcadas como visiveis" no banco,
+      // via RLS) — é o mesmo seletor "pago com" do NovoLancamento.jsx que o
+      // dono usa, só que a lista que chega já vem filtrada pelo próprio banco.
+      const [{ data: cts }, { data: crt }] = await Promise.all([
+        supabase.from("contas").select("id, nome, tipo, instituicao, titular").eq("familia_id", membro.familia_id),
+        supabase.from("cartoes_credito").select("id, nome, bandeira, titular").eq("familia_id", membro.familia_id),
+      ]);
       setContas(cts || []);
+      setCartoes(crt || []);
 
       if (membro.permissoes?.ver_saldo_geral) {
         const { data: r1 } = await supabase.rpc("resumo_familia_do_membro");
@@ -104,79 +109,32 @@ export default function MemberView({ membro }) {
         </div>
       )}
 
-      <NovoGasto membro={membro} contas={contas} onSalvo={carregar} />
+      <NovoLancamento
+        membroLogado={membro} contas={contas} cartoes={cartoes} tipoInicial="gasto"
+        aberto={lancamentoAberto} onAbrir={() => setLancamentoAberto(true)} onFechar={() => setLancamentoAberto(false)} onSalvo={() => { setLancamentoAberto(false); carregar(); }}
+      />
 
       <div style={cardStyle}>
         <div style={h2}>SEUS LANÇAMENTOS</div>
         {carregando && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Carregando…</div>}
         {!carregando && lancamentos.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Você ainda não lançou nada.</div>}
-        {lancamentos.slice(0, 30).map((l) => (
-          <div key={l.id} style={lineItem}>
-            <div>
-              <div style={{ fontSize: 14, color: C.ink }}>{l.descricao || l.categoria} <span style={{ color: C.inkFaint, fontSize: 12 }}>· {l.data}</span></div>
-              <div style={{ fontSize: 12, color: C.inkFaint, textTransform: "capitalize" }}>{l.categoria}</div>
+        {lancamentos.slice(0, 30).map((l) => {
+          const info = l.tipo === "receita" ? fonteDe(l.categoria) : frenteDe(l.categoria);
+          const Icone = (l.tipo === "receita" ? ICONE_FONTE_RECEITA : ICONE_FRENTE_GASTO)[l.categoria];
+          return (
+          <div key={l.id} style={{ ...lineItem, gap: 12 }}>
+            <div style={{ width: 32, height: 32, borderRadius: 10, background: info.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              {Icone && <Icone size={15} color={info.cor} strokeWidth={1.9} />}
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, color: C.ink }}>{l.descricao || info.label} <span style={{ color: C.inkFaint, fontSize: 12 }}>· {l.data}</span></div>
+              <div style={{ fontSize: 12, color: C.inkFaint }}>{info.label}</div>
             </div>
             <span style={{ fontSize: 14, fontWeight: 600, color: l.tipo === "gasto" ? C.danger : C.accent }}>{l.tipo === "gasto" ? "-" : "+"}{moeda(l.valor)}</span>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
-  );
-}
-
-function NovoGasto({ membro, contas, onSalvo }) {
-  const [categoria, setCategoria] = useState("mercado");
-  const [valor, setValor] = useState("");
-  const [descricao, setDescricao] = useState("");
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [contaId, setContaId] = useState("");
-  const [salvando, setSalvando] = useState(false);
-  const [erro, setErro] = useState("");
-
-  async function salvar(e) {
-    e.preventDefault();
-    setErro("");
-    if (!valor || Number(valor) <= 0) { setErro("Informe um valor válido."); return; }
-    setSalvando(true);
-    try {
-      const { error } = await supabase.from("lancamentos").insert({
-        familia_id: membro.familia_id,
-        membro_id: membro.id,
-        tipo: "gasto",
-        categoria, valor: Number(valor), descricao: descricao.trim() || null, data,
-        conta_id: contaId || null,
-      });
-      if (error) throw error;
-      setValor(""); setDescricao("");
-      onSalvo();
-    } catch (e) {
-      setErro(e.message || "Erro ao salvar.");
-    } finally {
-      setSalvando(false);
-    }
-  }
-
-  return (
-    <form style={cardStyle} onSubmit={salvar}>
-      <div style={h2}>LANÇAR UM GASTO SEU</div>
-      {erro && <div style={{ color: C.danger, fontSize: 13, marginBottom: 8 }}>{erro}</div>}
-      <div style={row}>
-        <select style={input} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
-          {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <input style={input} type="number" step="0.01" placeholder="Valor" value={valor} onChange={(e) => setValor(e.target.value)} />
-        <input style={input} type="date" value={data} onChange={(e) => setData(e.target.value)} />
-      </div>
-      {contas.length > 0 && (
-        <select style={{ ...input, display: "block", width: "100%", marginTop: 10 }} value={contaId} onChange={(e) => setContaId(e.target.value)}>
-          <option value="">De qual conta saiu? (opcional)</option>
-          {contas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-        </select>
-      )}
-      <input style={{ ...input, display: "block", width: "100%", marginTop: 10 }} placeholder="Descrição (opcional)" value={descricao} onChange={(e) => setDescricao(e.target.value)} />
-      <div style={{ marginTop: 12 }}>
-        <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Lançar"}</button>
-      </div>
-    </form>
   );
 }

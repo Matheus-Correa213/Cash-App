@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda } from "./theme.js";
+import { IconCard, IconCash } from "./Icons.jsx";
 
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 18, marginBottom: 16 };
 const h2 = { fontSize: 12, fontWeight: 800, color: C.inkFaint, marginBottom: 12, letterSpacing: "0.04em", textTransform: "uppercase" };
@@ -70,41 +71,63 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
 
   if (carregando) return <div style={cardStyle}>Carregando…</div>;
 
-  const correntes = contas.filter((c) => c.tipo === "corrente" || c.tipo === "carteira" || c.tipo === "outro");
+  const bancarias = contas.filter((c) => c.tipo === "corrente" || c.tipo === "outro");
+  const fisico = contas.filter((c) => c.tipo === "carteira");
   const poupancas = contas.filter((c) => c.tipo === "poupanca");
-  const saldoTotalCorrente = correntes.reduce((s, c) => s + Number(saldos[c.id] ?? c.saldo_inicial), 0);
+  const saldoBancarias = bancarias.reduce((s, c) => s + Number(saldos[c.id] ?? c.saldo_inicial), 0);
+  const saldoFisico = fisico.reduce((s, c) => s + Number(saldos[c.id] ?? c.saldo_inicial), 0);
+  const saldoDisponivel = saldoBancarias + saldoFisico;
+
+  function ListaContas(lista, tipoVazio) {
+    return lista.map((c) => {
+      const inst = instituicaoDe(c.instituicao || c.nome);
+      return (
+        <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: inst.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: "#fff" }}>{inst.sigla}</span>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{c.nome}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{c.titular || "—"} {c.visivel_para_restrito ? "· visível pra ela" : ""}</div>
+          </div>
+          <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(saldos[c.id] ?? c.saldo_inicial)}</span>
+          <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>
+        </div>
+      );
+    });
+  }
 
   return (
     <div>
       {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
 
       <div style={{ background: C.navy, borderRadius: 18, padding: 20, marginBottom: 16 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>Saldo em contas correntes</span>
-        <div style={{ fontSize: 26, fontWeight: 800, color: "#fff", marginTop: 4 }}>{moeda(saldoTotalCorrente)}</div>
-        <div style={{ fontSize: 11, fontWeight: 600, color: "rgba(255,255,255,0.5)", marginTop: 2 }}>{contas.length} conta{contas.length === 1 ? "" : "s"} conectada{contas.length === 1 ? "" : "s"}</div>
+        <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "rgba(255,255,255,0.55)" }}>Saldo disponível</span>
+        <div style={{ fontSize: 26, fontWeight: 800, color: "#fff", marginTop: 4 }}>{moeda(saldoDisponivel)}</div>
+        <div style={{ display: "flex", gap: 16, marginTop: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.accent }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Em contas {moeda(saldoBancarias)}</span>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.gold }} />
+            <span style={{ fontSize: 11, fontWeight: 700, color: "rgba(255,255,255,0.7)" }}>Em espécie {moeda(saldoFisico)}</span>
+          </div>
+        </div>
       </div>
 
       <div style={cardStyle}>
-        <div style={h2}>Conta corrente</div>
-        {correntes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma conta corrente cadastrada ainda.</div>}
-        {correntes.map((c) => {
-          const inst = instituicaoDe(c.instituicao || c.nome);
-          return (
-            <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
-              <div style={{ width: 34, height: 34, borderRadius: 10, background: inst.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                <span style={{ fontSize: 11, fontWeight: 800, color: "#fff" }}>{inst.sigla}</span>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{c.nome}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{c.titular || "—"} {c.visivel_para_restrito ? "· visível pra ela" : ""}</div>
-              </div>
-              <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(saldos[c.id] ?? c.saldo_inicial)}</span>
-              <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>
-            </div>
-          );
-        })}
-        {!mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta ou poupança</button>}
+        <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCard size={14} color={C.inkFaint} strokeWidth={2} /> Contas bancárias</div>
+        {bancarias.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma conta bancária cadastrada ainda.</div>}
+        {ListaContas(bancarias)}
+        {!mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta, carteira ou poupança</button>}
         {mostrarFormConta && <NovaConta familiaId={familiaId} onSalvo={() => { setMostrarFormConta(false); carregar(); }} onCancelar={() => setMostrarFormConta(false)} />}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCash size={14} color={C.inkFaint} strokeWidth={2} /> Dinheiro em espécie</div>
+        {fisico.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhuma carteira física cadastrada ainda — use "Adicionar conta" acima e escolha o tipo "Carteira/dinheiro".</div>}
+        {ListaContas(fisico)}
       </div>
 
       {poupancas.length > 0 && (

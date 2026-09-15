@@ -60,6 +60,8 @@ export function IconDots({ size = 20, color = "currentColor" }) {
 // O ícone do próprio COSMO (o "olho"/órbita) em duas versões: uma simples
 // (um anel só, usada em selos pequenos) e uma completa (dois anéis
 // cruzados, usada como "logo" do assistente em telas maiores).
+export function IconCash(p) { return <Svg {...p}><rect x="2" y="6" width="20" height="12" rx="2" /><circle cx="12" cy="12" r="3" /><path d="M6 10v.01" /><path d="M18 14v.01" /></Svg>; }
+
 export function IconUsers(p) { return <Svg {...p}><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></Svg>; }
 
 export function IconCosmo(p) { return <Svg {...p}><circle cx="12" cy="12" r="2" /><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(28 12 12)" /></Svg>; }

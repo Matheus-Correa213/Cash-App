@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, FRENTES_GASTO, FONTES_RECEITA, instituicaoDe, moeda, somarMeses } from "./theme.js";
-import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, IconCard, IconCreditCard, IconClose } from "./Icons.jsx";
+import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
 // conta/cartão (cores por instituição) e, quando o pagamento é num cartão,
@@ -139,8 +139,10 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
               const inst = instituicaoDe(c.instituicao || c.nome);
               const ativo = pagoCom === `conta:${c.id}`;
               return (
-                <ChipToggle key={`conta:${c.id}`} ativo={ativo} cor={inst.cor} onClick={() => setPagoCom(`conta:${c.id}`)}>
-                  <IconCard size={14} color={ativo ? "#fff" : C.inkMute} strokeWidth={2} />
+                <ChipToggle key={`conta:${c.id}`} ativo={ativo} cor={c.tipo === "carteira" ? C.gold : inst.cor} onClick={() => setPagoCom(`conta:${c.id}`)}>
+                  {c.tipo === "carteira"
+                    ? <IconCash size={14} color={ativo ? "#fff" : C.inkMute} strokeWidth={2} />
+                    : <IconCard size={14} color={ativo ? "#fff" : C.inkMute} strokeWidth={2} />}
                   {c.nome}{c.titular ? ` (${c.titular})` : ""}
                 </ChipToggle>
               );
