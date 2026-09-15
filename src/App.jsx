@@ -1,5 +1,5 @@
 import React from "react";
-import { C } from "./AuthGate.jsx";
+import { C } from "./theme.js";
 import OwnerView from "./OwnerView.jsx";
 import MemberView from "./MemberView.jsx";
 

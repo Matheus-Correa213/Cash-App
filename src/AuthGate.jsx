@@ -1,20 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { supabase, supabaseReady } from "./supabaseClient.js";
 import App from "./App.jsx";
-
-// Paleta simples, no mesmo espírito visual do COSMO (fundo claro, tinta escura,
-// um verde de destaque), mas sem depender de nada do código do COSMO.
-export const C = {
-  bg: "#F4F5F3",
-  card: "#FFFFFF",
-  ink: "#1C1E1B",
-  inkMute: "#5B5F58",
-  inkFaint: "#8A8E85",
-  line: "#E3E5E0",
-  accent: "#2F6D4F",
-  accentSoft: "#E7F1EC",
-  danger: "#B3432B",
-};
+import { C } from "./theme.js";
 
 const wrap = { minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "system-ui, -apple-system, sans-serif" };
 const card = { background: C.card, borderRadius: 16, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 2px 16px rgba(0,0,0,0.06)", border: `1px solid ${C.line}` };

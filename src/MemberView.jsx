@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C } from "./AuthGate.jsx";
+import { C } from "./theme.js";
 
 const wrap = { padding: 18, maxWidth: 560, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
