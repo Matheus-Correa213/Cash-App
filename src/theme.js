@@ -7,6 +7,13 @@
 // JavaScript), deixando a tela inteira em branco sem nenhum erro visível além
 // do console. Isolando a paleta aqui, ninguém mais precisa importar
 // AuthGate.jsx só pra pegar uma cor, e o ciclo desaparece.
+// Paleta atualizada 16/09/2026 pra usar as cores de verdade da marca Correa
+// Cash (extraídas por amostragem da própria logo, mesmo processo usado pra
+// gerar os ícones): azul da carteira, dourado do "CC", verde das notinhas, e o
+// azul-marinho do fundo escuro da logo. O "accent" (usado em botões e valores
+// positivos em todo o app) trocou do verde genérico de antes pro azul da
+// marca — o resto do app ganha a identidade visual de graça, sem precisar
+// mexer em cada tela.
 export const C = {
   bg: "#F4F5F3",
   card: "#FFFFFF",
@@ -14,7 +21,10 @@ export const C = {
   inkMute: "#5B5F58",
   inkFaint: "#8A8E85",
   line: "#E3E5E0",
-  accent: "#2F6D4F",
-  accentSoft: "#E7F1EC",
+  accent: "#0469FB",
+  accentSoft: "#E7F0FE",
   danger: "#B3432B",
+  gold: "#FFC800",
+  green: "#2ED191",
+  navy: "#030F31",
 };

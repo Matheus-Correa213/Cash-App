@@ -1,6 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C } from "./theme.js";
+import ContasCartoes from "./ContasCartoes.jsx";
+import Investimentos from "./Investimentos.jsx";
+import Relatorios from "./Relatorios.jsx";
 
 const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
@@ -22,21 +25,29 @@ function inicioMesISO() { const d = new Date(); d.setDate(1); return d.toISOStri
 export default function OwnerView({ membro, onMembroAtualizado }) {
   const [lancamentos, setLancamentos] = useState([]);
   const [membros, setMembros] = useState([]);
+  const [contas, setContas] = useState([]);
+  const [cartoes, setCartoes] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [aba, setAba] = useState("visao"); // visao | membros
+  const [aba, setAba] = useState("visao"); // visao | contas | investimentos | relatorios | membros
 
   async function carregarTudo() {
     setCarregando(true); setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(200),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
+        supabase.from("contas").select("id, nome").eq("familia_id", membro.familia_id).order("nome"),
+        supabase.from("cartoes_credito").select("id, nome").eq("familia_id", membro.familia_id).order("nome"),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
+      if (e3) throw e3;
+      if (e4) throw e4;
       setLancamentos(lanc || []);
       setMembros(memb || []);
+      setContas(cts || []);
+      setCartoes(crt || []);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
@@ -84,12 +95,15 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
 
       <div style={row}>
         <button style={aba === "visao" ? btn : btnGhost} onClick={() => setAba("visao")}>Visão geral</button>
+        <button style={aba === "contas" ? btn : btnGhost} onClick={() => setAba("contas")}>Contas e cartões</button>
+        <button style={aba === "investimentos" ? btn : btnGhost} onClick={() => setAba("investimentos")}>Investimentos</button>
+        <button style={aba === "relatorios" ? btn : btnGhost} onClick={() => setAba("relatorios")}>Relatórios</button>
         <button style={aba === "membros" ? btn : btnGhost} onClick={() => setAba("membros")}>Membros e permissões</button>
       </div>
 
       {aba === "visao" && (
         <>
-          <NovoLancamento membros={membros} membroLogado={membro} onSalvo={carregarTudo} />
+          <NovoLancamento membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} onSalvo={carregarTudo} />
 
           <div style={cardStyle}>
             <div style={h2}>GASTOS POR CATEGORIA (MÊS)</div>
@@ -126,6 +140,12 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         </>
       )}
 
+      {aba === "contas" && <ContasCartoes familiaId={membro.familia_id} />}
+
+      {aba === "investimentos" && <Investimentos familiaId={membro.familia_id} />}
+
+      {aba === "relatorios" && <Relatorios familiaId={membro.familia_id} />}
+
       {aba === "membros" && (
         <GerenciarMembros membros={membros} membroLogado={membro} onAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }} />
       )}
@@ -133,13 +153,15 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function NovoLancamento({ membros, membroLogado, onSalvo }) {
+function NovoLancamento({ membros, membroLogado, contas, cartoes, onSalvo }) {
   const [tipo, setTipo] = useState("gasto");
   const [categoria, setCategoria] = useState("mercado");
   const [valor, setValor] = useState("");
   const [descricao, setDescricao] = useState("");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [membroId, setMembroId] = useState(membroLogado.id);
+  const [pagoCom, setPagoCom] = useState(""); // "" | `conta:<id>` | `cartao:<id>`
+  const [tag, setTag] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
 
@@ -149,13 +171,20 @@ function NovoLancamento({ membros, membroLogado, onSalvo }) {
     if (!valor || Number(valor) <= 0) { setErro("Informe um valor válido."); return; }
     setSalvando(true);
     try {
+      // "Pago com" guarda conta OU cartão, nunca os dois — um gasto no cartão
+      // só entra na conta quando a fatura é paga (ver ContasCartoes.jsx /
+      // pagar_fatura_cartao no banco), então aqui é sempre um ou outro.
+      const [modo, id] = pagoCom ? pagoCom.split(":") : [null, null];
       const { error } = await supabase.from("lancamentos").insert({
         familia_id: membroLogado.familia_id,
         membro_id: membroId,
         tipo, categoria, valor: Number(valor), descricao: descricao.trim() || null, data,
+        conta_id: modo === "conta" ? id : null,
+        cartao_id: modo === "cartao" ? id : null,
+        tag: tag.trim() || null,
       });
       if (error) throw error;
-      setValor(""); setDescricao("");
+      setValor(""); setDescricao(""); setTag(""); setPagoCom("");
       onSalvo();
     } catch (e) {
       setErro(e.message || "Erro ao salvar.");
@@ -184,6 +213,22 @@ function NovoLancamento({ membros, membroLogado, onSalvo }) {
         <input style={input} type="number" step="0.01" placeholder="Valor" value={valor} onChange={(e) => setValor(e.target.value)} />
         <input style={{ ...input, flex: "2 1 200px" }} placeholder="Descrição (opcional)" value={descricao} onChange={(e) => setDescricao(e.target.value)} />
         <input style={input} type="date" value={data} onChange={(e) => setData(e.target.value)} />
+      </div>
+      <div style={{ ...row, marginTop: 10 }}>
+        <select style={{ ...select, flex: "1 1 200px" }} value={pagoCom} onChange={(e) => setPagoCom(e.target.value)}>
+          <option value="">Pago com — não informado</option>
+          {contas.length > 0 && (
+            <optgroup label="Contas">
+              {contas.map((c) => <option key={c.id} value={`conta:${c.id}`}>{c.nome}</option>)}
+            </optgroup>
+          )}
+          {cartoes.length > 0 && (
+            <optgroup label="Cartões de crédito">
+              {cartoes.map((k) => <option key={k.id} value={`cartao:${k.id}`}>{k.nome}</option>)}
+            </optgroup>
+          )}
+        </select>
+        <input style={input} placeholder="Tag (opcional, ex: Casamento)" value={tag} onChange={(e) => setTag(e.target.value)} />
       </div>
       <div style={{ marginTop: 12 }}>
         <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Lançar"}</button>

@@ -211,6 +211,79 @@ begin
 end;
 $$;
 
+-- ------------------------------------------------------------
+-- Funções de ONBOARDING (correção 15/09/2026) — criar a família e reivindicar
+-- um convite, como UMA operação atômica cada, rodando no servidor com
+-- auth.uid() calculado ali mesmo (nunca o que o navegador manda). Antes, essas
+-- duas ações eram feitas como insert/update direto do navegador contra as
+-- políticas de RLS, e davam "new row violates row-level security policy" logo
+-- depois do primeiro login — exatamente o momento mais frágil (o usuário
+-- ainda não tem NENHUMA linha em "membros", que é o que as outras funções
+-- auxiliares acima (minha_familia_id, meu_papel...) precisam pra funcionar).
+-- Rodando como função seguem o mesmo princípio de segurança do restante do
+-- schema: SECURITY DEFINER só pra poder escrever, mas com a checagem de
+-- identidade (auth.uid()) feita dentro da própria função, não confiada ao
+-- que foi enviado pelo cliente.
+-- ------------------------------------------------------------
+create or replace function criar_minha_familia(p_nome text)
+returns membros
+language plpgsql security definer
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_email text := auth.email();
+  v_familia_id uuid;
+  v_membro membros;
+begin
+  if v_uid is null then
+    raise exception 'Não autenticado.';
+  end if;
+  if exists (select 1 from membros where user_id = v_uid) then
+    raise exception 'Você já faz parte de uma família no Cash App.';
+  end if;
+  insert into familias (nome, dono_user_id)
+    values (concat('Família ', coalesce(nullif(trim(p_nome), ''), 'Corrêa')), v_uid)
+    returning id into v_familia_id;
+  insert into membros (familia_id, user_id, email, nome, papel, permissoes)
+    values (
+      v_familia_id, v_uid, v_email,
+      coalesce(nullif(trim(p_nome), ''), 'Administrador(a)'),
+      'dono',
+      '{"ver_saldo_geral": true, "ver_gastos_dono": true, "ver_resumo_categorias": true}'::jsonb
+    )
+    returning * into v_membro;
+  return v_membro;
+end;
+$$;
+
+create or replace function reivindicar_convite()
+returns membros
+language plpgsql security definer
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_email text := auth.email();
+  v_membro membros;
+begin
+  if v_uid is null then
+    raise exception 'Não autenticado.';
+  end if;
+  if v_email is null then
+    raise exception 'Não foi possível identificar seu e-mail.';
+  end if;
+  update membros set user_id = v_uid
+    where user_id is null and email is not null and lower(email) = lower(v_email)
+    returning * into v_membro;
+  if v_membro.id is null then
+    raise exception 'Nenhum convite pendente encontrado para este e-mail.';
+  end if;
+  return v_membro;
+end;
+$$;
+
+grant execute on function criar_minha_familia(text) to authenticated;
+grant execute on function reivindicar_convite() to authenticated;
+
 grant execute on function minha_familia_id() to authenticated;
 grant execute on function meu_papel() to authenticated;
 grant execute on function meu_membro_id() to authenticated;
@@ -218,6 +291,150 @@ grant execute on function minhas_permissoes() to authenticated;
 grant execute on function resumo_familia_do_membro() to authenticated;
 grant execute on function resumo_categorias_do_membro() to authenticated;
 
--- Fim do script. Depois de rodar, confira em Table Editor se as 3 tabelas
--- (familias, membros, lancamentos) aparecem, cada uma com o cadeado de RLS
--- ativado (ícone ao lado do nome da tabela).
+-- ============================================================
+-- A partir daqui: robustez (contas, cartões de crédito, investimentos) —
+-- adicionado 15/09/2026. Ver supabase-migracao-2-robustez.sql se você já
+-- tem um banco rodando e só precisa da parte nova.
+-- ============================================================
+
+create table if not exists contas (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  nome text not null,
+  tipo text not null default 'corrente' check (tipo in ('corrente', 'poupanca', 'carteira', 'outro')),
+  instituicao text,
+  saldo_inicial numeric(12,2) not null default 0,
+  visivel_para_restrito boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists cartoes_credito (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  conta_pagamento_id uuid references contas(id) on delete set null,
+  nome text not null,
+  bandeira text,
+  limite numeric(12,2),
+  dia_fechamento smallint check (dia_fechamento between 1 and 31),
+  dia_vencimento smallint check (dia_vencimento between 1 and 31),
+  visivel_para_restrito boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists investimentos (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  nome text not null,
+  tipo text not null check (tipo in ('renda_fixa', 'renda_variavel')),
+  subtipo text,
+  instituicao text,
+  objetivo text check (objetivo in ('curto', 'medio', 'longo')),
+  valor_aportado numeric(12,2) not null default 0,
+  valor_atual numeric(12,2) not null default 0,
+  data_aporte date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+alter table lancamentos add column if not exists conta_id uuid references contas(id) on delete set null;
+alter table lancamentos add column if not exists cartao_id uuid references cartoes_credito(id) on delete set null;
+alter table lancamentos add column if not exists tag text;
+alter table lancamentos add column if not exists fatura_paga boolean not null default false;
+
+create index if not exists idx_lancamentos_conta on lancamentos (conta_id);
+create index if not exists idx_lancamentos_cartao on lancamentos (cartao_id);
+create index if not exists idx_lancamentos_tag on lancamentos (tag);
+
+alter table contas enable row level security;
+alter table cartoes_credito enable row level security;
+alter table investimentos enable row level security;
+
+create policy "contas: dono ve e mexe em tudo" on contas
+  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
+  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+create policy "contas: membro ve as marcadas como visiveis" on contas
+  for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
+
+create policy "cartoes: dono ve e mexe em tudo" on cartoes_credito
+  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
+  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+create policy "cartoes: membro ve os marcados como visiveis" on cartoes_credito
+  for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
+
+create policy "investimentos: so o dono ve e mexe" on investimentos
+  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
+  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+create or replace function saldos_contas()
+returns table(conta_id uuid, saldo numeric)
+language sql security definer stable
+as $$
+  select c.id, c.saldo_inicial + coalesce(sum(
+    case when l.tipo = 'receita' then l.valor
+         when l.tipo = 'gasto' then -l.valor
+         else 0 end
+  ), 0) as saldo
+  from contas c
+  left join lancamentos l on l.conta_id = c.id
+  where c.familia_id = minha_familia_id() and meu_papel() = 'dono'
+  group by c.id, c.saldo_inicial;
+$$;
+
+create or replace function pagar_fatura_cartao(p_cartao_id uuid, p_descricao text default null)
+returns lancamentos
+language plpgsql security definer
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_familia_id uuid := minha_familia_id();
+  v_papel text := meu_papel();
+  v_membro_id uuid := meu_membro_id();
+  v_cartao cartoes_credito;
+  v_total numeric;
+  v_lancamento lancamentos;
+begin
+  if v_uid is null then
+    raise exception 'Não autenticado.';
+  end if;
+  if v_papel <> 'dono' then
+    raise exception 'Só o administrador pode pagar faturas.';
+  end if;
+
+  select * into v_cartao from cartoes_credito where id = p_cartao_id and familia_id = v_familia_id;
+  if v_cartao.id is null then
+    raise exception 'Cartão não encontrado.';
+  end if;
+  if v_cartao.conta_pagamento_id is null then
+    raise exception 'Este cartão não tem uma conta de pagamento configurada.';
+  end if;
+
+  select coalesce(sum(valor), 0) into v_total
+    from lancamentos
+    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto';
+
+  if v_total <= 0 then
+    raise exception 'Não há fatura em aberto para este cartão.';
+  end if;
+
+  insert into lancamentos (familia_id, membro_id, tipo, categoria, valor, descricao, data, conta_id)
+    values (
+      v_familia_id, v_membro_id, 'gasto', 'fatura_cartao', v_total,
+      coalesce(nullif(trim(p_descricao), ''), concat('Fatura ', v_cartao.nome)),
+      current_date, v_cartao.conta_pagamento_id
+    )
+    returning * into v_lancamento;
+
+  update lancamentos set fatura_paga = true
+    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto' and id <> v_lancamento.id;
+
+  return v_lancamento;
+end;
+$$;
+
+grant execute on function saldos_contas() to authenticated;
+grant execute on function pagar_fatura_cartao(uuid, text) to authenticated;
+
+-- Fim do script. Depois de rodar, confira em Table Editor se as tabelas
+-- (familias, membros, lancamentos, contas, cartoes_credito, investimentos)
+-- aparecem, cada uma com o cadeado de RLS ativado (ícone ao lado do nome).

@@ -19,6 +19,7 @@ function inicioMesISO() { const d = new Date(); d.setDate(1); return d.toISOStri
 
 export default function MemberView({ membro }) {
   const [lancamentos, setLancamentos] = useState([]);
+  const [contas, setContas] = useState([]);
   const [resumoFamilia, setResumoFamilia] = useState(null);
   const [resumoCategorias, setResumoCategorias] = useState(null);
   const [carregando, setCarregando] = useState(true);
@@ -32,6 +33,12 @@ export default function MemberView({ membro }) {
         .order("data", { ascending: false }).limit(100);
       if (e1) throw e1;
       setLancamentos(lanc || []);
+
+      // Ela só enxerga as contas que o Matheus deixou explicitamente visíveis
+      // (política "contas: membro ve as marcadas como visiveis" no banco) —
+      // é só pra saber de onde saiu o gasto dela, nunca a lista toda.
+      const { data: cts } = await supabase.from("contas").select("id, nome").eq("familia_id", membro.familia_id);
+      setContas(cts || []);
 
       if (membro.permissoes?.ver_saldo_geral) {
         const { data: r1 } = await supabase.rpc("resumo_familia_do_membro");
@@ -97,7 +104,7 @@ export default function MemberView({ membro }) {
         </div>
       )}
 
-      <NovoGasto membro={membro} onSalvo={carregar} />
+      <NovoGasto membro={membro} contas={contas} onSalvo={carregar} />
 
       <div style={cardStyle}>
         <div style={h2}>SEUS LANÇAMENTOS</div>
@@ -117,11 +124,12 @@ export default function MemberView({ membro }) {
   );
 }
 
-function NovoGasto({ membro, onSalvo }) {
+function NovoGasto({ membro, contas, onSalvo }) {
   const [categoria, setCategoria] = useState("mercado");
   const [valor, setValor] = useState("");
   const [descricao, setDescricao] = useState("");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
+  const [contaId, setContaId] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
 
@@ -136,6 +144,7 @@ function NovoGasto({ membro, onSalvo }) {
         membro_id: membro.id,
         tipo: "gasto",
         categoria, valor: Number(valor), descricao: descricao.trim() || null, data,
+        conta_id: contaId || null,
       });
       if (error) throw error;
       setValor(""); setDescricao("");
@@ -158,6 +167,12 @@ function NovoGasto({ membro, onSalvo }) {
         <input style={input} type="number" step="0.01" placeholder="Valor" value={valor} onChange={(e) => setValor(e.target.value)} />
         <input style={input} type="date" value={data} onChange={(e) => setData(e.target.value)} />
       </div>
+      {contas.length > 0 && (
+        <select style={{ ...input, display: "block", width: "100%", marginTop: 10 }} value={contaId} onChange={(e) => setContaId(e.target.value)}>
+          <option value="">De qual conta saiu? (opcional)</option>
+          {contas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+        </select>
+      )}
       <input style={{ ...input, display: "block", width: "100%", marginTop: 10 }} placeholder="Descrição (opcional)" value={descricao} onChange={(e) => setDescricao(e.target.value)} />
       <div style={{ marginTop: 12 }}>
         <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Lançar"}</button>

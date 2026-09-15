@@ -3,8 +3,23 @@ import { supabase, supabaseReady } from "./supabaseClient.js";
 import App from "./App.jsx";
 import { C } from "./theme.js";
 
-const wrap = { minHeight: "100vh", background: C.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "system-ui, -apple-system, sans-serif" };
-const card = { background: C.card, borderRadius: 16, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 2px 16px rgba(0,0,0,0.06)", border: `1px solid ${C.line}` };
+// Tela de início colorida: fundo em gradiente com as cores de verdade da
+// marca (azul-marinho -> azul da carteira), igual à logo. O card por cima
+// continua branco pra manter o texto legível — só o fundo ganhou cor.
+const wrap = { minHeight: "100vh", background: `linear-gradient(160deg, ${C.navy} 0%, ${C.accent} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "system-ui, -apple-system, sans-serif" };
+const card = { background: C.card, borderRadius: 16, padding: 28, width: "100%", maxWidth: 380, boxShadow: "0 12px 32px rgba(3,15,49,0.35)", border: `1px solid ${C.line}` };
+const logoWrap = { display: "flex", justifyContent: "center", marginBottom: 18 };
+const logoImg = { width: 88, height: 88, borderRadius: 20, boxShadow: "0 4px 14px rgba(3,15,49,0.25)" };
+
+// Logo oficial do Correa Cash (o mesmo arquivo usado como ícone do app/PWA,
+// já publicado em /public) — aparece em toda tela anterior ao login.
+function Logo() {
+  return (
+    <div style={logoWrap}>
+      <img src="/icon-512-maskable.png" alt="Correa Cash" style={logoImg} />
+    </div>
+  );
+}
 const input = { width: "100%", padding: "12px 14px", borderRadius: 10, border: `1px solid ${C.line}`, fontSize: 15, marginBottom: 12, background: "#fff", color: C.ink };
 const button = { width: "100%", padding: "13px 14px", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontSize: 15, fontWeight: 600, cursor: "pointer" };
 const linkBtn = { background: "none", border: "none", color: C.accent, fontSize: 13.5, cursor: "pointer", padding: 0, marginTop: 14, display: "block", textAlign: "center", width: "100%" };
@@ -30,6 +45,7 @@ export default function AuthGate() {
     return (
       <div style={wrap}>
         <div style={card}>
+          <Logo />
           <div style={title}>Correa Cash</div>
           <div style={subtitle}>
             Este app ainda não está conectado a um banco de dados. Configure
@@ -41,7 +57,7 @@ export default function AuthGate() {
     );
   }
 
-  if (checking) return <div style={wrap}><div style={{ color: C.inkMute }}>Carregando…</div></div>;
+  if (checking) return <div style={wrap}><div style={{ textAlign: "center" }}><Logo /><div style={{ color: "#fff" }}>Carregando…</div></div></div>;
 
   if (!session) return <LoginForm />;
 
@@ -78,6 +94,7 @@ function LoginForm() {
   return (
     <div style={wrap}>
       <form style={card} onSubmit={submeter}>
+        <Logo />
         <div style={title}>Correa Cash</div>
         <div style={subtitle}>Finanças do casal — Correa Tech</div>
         {erro && <div style={errBox}>{erro}</div>}
@@ -162,12 +179,13 @@ function MembroGate({ session }) {
     await supabase.auth.signOut();
   }
 
-  if (estado === "carregando") return <div style={wrap}><div style={{ color: C.inkMute }}>Carregando…</div></div>;
+  if (estado === "carregando") return <div style={wrap}><div style={{ textAlign: "center" }}><Logo /><div style={{ color: "#fff" }}>Carregando…</div></div></div>;
 
   if (estado === "erro") {
     return (
       <div style={wrap}>
         <div style={card}>
+          <Logo />
           <div style={title}>Algo deu errado</div>
           <div style={subtitle}>{erro}</div>
           <button style={button} onClick={carregar}>Tentar de novo</button>
@@ -181,6 +199,7 @@ function MembroGate({ session }) {
     return (
       <div style={wrap}>
         <div style={card}>
+          <Logo />
           <div style={title}>Convite encontrado</div>
           <div style={subtitle}>Encontramos um convite para {session.user.email}. Toque abaixo para entrar na sua família no Correa Cash.</div>
           <button style={button} onClick={reivindicarConvite}>Entrar na família</button>
@@ -229,6 +248,7 @@ function CriarFamilia({ session, onCriada, onSair }) {
   return (
     <div style={wrap}>
       <form style={card} onSubmit={criar}>
+        <Logo />
         <div style={title}>Bem-vindo ao Correa Cash</div>
         <div style={subtitle}>Você é a primeira pessoa a entrar — vamos criar sua família. Depois você convida a segunda pessoa dentro do app.</div>
         {erro && <div style={errBox}>{erro}</div>}
