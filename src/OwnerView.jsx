@@ -1,53 +1,67 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C } from "./theme.js";
+import Painel from "./Painel.jsx";
+import Receitas from "./Receitas.jsx";
+import Gastos from "./Gastos.jsx";
 import ContasCartoes from "./ContasCartoes.jsx";
+import CartaoDetalhe from "./CartaoDetalhe.jsx";
 import Investimentos from "./Investimentos.jsx";
 import Relatorios from "./Relatorios.jsx";
+import Assinaturas from "./Assinaturas.jsx";
+import ChatCosmo from "./ChatCosmo.jsx";
+import ImportarArquivo from "./ImportarArquivo.jsx";
 
-const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16 };
+const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingBottom: 90 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
-const h2 = { fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 12, letterSpacing: "0.02em" };
-const row = { display: "flex", gap: 10, flexWrap: "wrap" };
 const input = { flex: "1 1 120px", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14 };
-const select = { ...input };
 const btn = { padding: "10px 16px", borderRadius: 9, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" };
 const btnGhost = { padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" };
-const statBig = { fontSize: 26, fontWeight: 700, color: C.ink };
-const statLabel = { fontSize: 12, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.06em" };
-const lineItem = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: `1px solid ${C.line}` };
 
-const CATEGORIAS = ["mercado", "casa", "lazer", "transporte", "saude", "mesada", "contas", "outros"];
-
-function moeda(v) { return `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`; }
-function inicioMesISO() { const d = new Date(); d.setDate(1); return d.toISOString().slice(0, 10); }
+// A navegação de baixo tem só 4 abas fixas (Painel/Receitas/Gastos/Mais),
+// exatamente como no mockup do redesign. Tudo o que não coube nas 4 abas
+// (Contas, Cartão em detalhe, Investimentos, Relatórios, Assinaturas, Chat,
+// Importar, Membros) é alcançado pelos atalhos do Painel ou pelo menu "Mais",
+// e fica guardado num "tela" à parte pra poder empilhar (ex: entrar num
+// cartão específico a partir de Contas).
+const ABAS_PRINCIPAIS = [
+  { chave: "painel", label: "Painel" },
+  { chave: "receitas", label: "Receitas" },
+  { chave: "gastos", label: "Gastos" },
+  { chave: "mais", label: "Mais" },
+];
 
 export default function OwnerView({ membro, onMembroAtualizado }) {
   const [lancamentos, setLancamentos] = useState([]);
   const [membros, setMembros] = useState([]);
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
+  const [assinaturas, setAssinaturas] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
-  const [aba, setAba] = useState("visao"); // visao | contas | investimentos | relatorios | membros
+  const [aba, setAba] = useState("painel");
+  const [tela, setTela] = useState(null); // ex: "contas" | "cartao:<id>" | "investimentos" | "relatorios" | "assinaturas" | "chat" | "importar" | "membros"
 
   async function carregarTudo() {
     setCarregando(true); setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }] = await Promise.all([
-        supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(200),
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }] = await Promise.all([
+        supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
-        supabase.from("contas").select("id, nome").eq("familia_id", membro.familia_id).order("nome"),
-        supabase.from("cartoes_credito").select("id, nome").eq("familia_id", membro.familia_id).order("nome"),
+        supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
+        supabase.from("cartoes_credito").select("*").eq("familia_id", membro.familia_id).order("nome"),
+        supabase.from("assinaturas").select("*").eq("familia_id", membro.familia_id).order("dia_cobranca"),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
       if (e3) throw e3;
       if (e4) throw e4;
+      if (e5) throw e5;
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
       setCartoes(crt || []);
+      setAssinaturas(assn || []);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
@@ -57,192 +71,109 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
 
   useEffect(() => { carregarTudo(); }, []);
 
-  const doMes = useMemo(() => lancamentos.filter((l) => l.data >= inicioMesISO()), [lancamentos]);
-  const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
-  const totalReceitas = useMemo(() => doMes.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
-  const porCategoria = useMemo(() => {
-    const m = {};
-    for (const l of doMes) if (l.tipo === "gasto") m[l.categoria] = (m[l.categoria] || 0) + Number(l.valor);
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [doMes]);
   const nomePorMembroId = useMemo(() => Object.fromEntries(membros.map((m) => [m.id, m.nome])), [membros]);
 
-  async function excluirLancamento(id) {
-    if (!confirm("Excluir este lançamento?")) return;
-    const { error } = await supabase.from("lancamentos").delete().eq("id", id);
-    if (error) return alert(error.message);
-    carregarTudo();
+  function irPara(destino) {
+    if (destino === "painel" || destino === "receitas" || destino === "gastos") {
+      setAba(destino); setTela(null);
+    } else {
+      setAba("mais"); setTela(destino);
+    }
+  }
+
+  function abrirAba(nomeAba) {
+    setAba(nomeAba);
+    if (nomeAba !== "mais") setTela(null);
   }
 
   return (
     <div style={wrap}>
       {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
-
-      <div style={row}>
-        <div style={{ ...cardStyle, flex: 1, minWidth: 140 }}>
-          <div style={statLabel}>Gastos do mês</div>
-          <div style={statBig}>{moeda(totalGastos)}</div>
-        </div>
-        <div style={{ ...cardStyle, flex: 1, minWidth: 140 }}>
-          <div style={statLabel}>Receitas do mês</div>
-          <div style={statBig}>{moeda(totalReceitas)}</div>
-        </div>
-        <div style={{ ...cardStyle, flex: 1, minWidth: 140 }}>
-          <div style={statLabel}>Saldo do mês</div>
-          <div style={{ ...statBig, color: totalReceitas - totalGastos >= 0 ? C.accent : C.danger }}>{moeda(totalReceitas - totalGastos)}</div>
-        </div>
-      </div>
-
-      <div style={row}>
-        <button style={aba === "visao" ? btn : btnGhost} onClick={() => setAba("visao")}>Visão geral</button>
-        <button style={aba === "contas" ? btn : btnGhost} onClick={() => setAba("contas")}>Contas e cartões</button>
-        <button style={aba === "investimentos" ? btn : btnGhost} onClick={() => setAba("investimentos")}>Investimentos</button>
-        <button style={aba === "relatorios" ? btn : btnGhost} onClick={() => setAba("relatorios")}>Relatórios</button>
-        <button style={aba === "membros" ? btn : btnGhost} onClick={() => setAba("membros")}>Membros e permissões</button>
-      </div>
-
-      {aba === "visao" && (
+      {carregando ? (
+        <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Carregando…</div>
+      ) : (
         <>
-          <NovoLancamento membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} onSalvo={carregarTudo} />
+          {aba === "painel" && (
+            <Painel membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} onNavegar={irPara} onSalvo={carregarTudo} />
+          )}
 
-          <div style={cardStyle}>
-            <div style={h2}>GASTOS POR CATEGORIA (MÊS)</div>
-            {porCategoria.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhum gasto lançado ainda este mês.</div>}
-            {porCategoria.map(([cat, val]) => (
-              <div key={cat} style={lineItem}>
-                <span style={{ fontSize: 14, color: C.ink, textTransform: "capitalize" }}>{cat}</span>
-                <span style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{moeda(val)}</span>
-              </div>
-            ))}
-          </div>
+          {aba === "receitas" && (
+            <Receitas membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={carregarTudo} />
+          )}
 
-          <div style={cardStyle}>
-            <div style={h2}>LANÇAMENTOS RECENTES</div>
-            {carregando && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Carregando…</div>}
-            {!carregando && lancamentos.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhum lançamento ainda.</div>}
-            {lancamentos.slice(0, 40).map((l) => (
-              <div key={l.id} style={lineItem}>
-                <div>
-                  <div style={{ fontSize: 14, color: C.ink }}>
-                    {l.descricao || l.categoria} <span style={{ color: C.inkFaint, fontSize: 12 }}>· {nomePorMembroId[l.membro_id] || "?"} · {l.data}</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: C.inkFaint, textTransform: "capitalize" }}>{l.categoria}</div>
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                  <span style={{ fontSize: 14, fontWeight: 600, color: l.tipo === "gasto" ? C.danger : C.accent }}>
-                    {l.tipo === "gasto" ? "-" : "+"}{moeda(l.valor)}
-                  </span>
-                  <button style={btnGhost} onClick={() => excluirLancamento(l.id)}>Excluir</button>
-                </div>
-              </div>
-            ))}
-          </div>
+          {aba === "gastos" && (
+            <Gastos membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={carregarTudo} />
+          )}
+
+          {aba === "mais" && (
+            <TelaMais
+              tela={tela} setTela={setTela}
+              membro={membro} membros={membros} contas={contas} cartoes={cartoes}
+              onMembroAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }}
+              onSalvo={carregarTudo}
+            />
+          )}
         </>
       )}
 
-      {aba === "contas" && <ContasCartoes familiaId={membro.familia_id} />}
-
-      {aba === "investimentos" && <Investimentos familiaId={membro.familia_id} />}
-
-      {aba === "relatorios" && <Relatorios familiaId={membro.familia_id} />}
-
-      {aba === "membros" && (
-        <GerenciarMembros membros={membros} membroLogado={membro} onAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }} />
-      )}
+      <BarraInferior aba={aba} onEscolher={abrirAba} />
     </div>
   );
 }
 
-function NovoLancamento({ membros, membroLogado, contas, cartoes, onSalvo }) {
-  const [tipo, setTipo] = useState("gasto");
-  const [categoria, setCategoria] = useState("mercado");
-  const [valor, setValor] = useState("");
-  const [descricao, setDescricao] = useState("");
-  const [data, setData] = useState(new Date().toISOString().slice(0, 10));
-  const [membroId, setMembroId] = useState(membroLogado.id);
-  const [pagoCom, setPagoCom] = useState(""); // "" | `conta:<id>` | `cartao:<id>`
-  const [tag, setTag] = useState("");
-  const [salvando, setSalvando] = useState(false);
-  const [erro, setErro] = useState("");
-
-  async function salvar(e) {
-    e.preventDefault();
-    setErro("");
-    if (!valor || Number(valor) <= 0) { setErro("Informe um valor válido."); return; }
-    setSalvando(true);
-    try {
-      // "Pago com" guarda conta OU cartão, nunca os dois — um gasto no cartão
-      // só entra na conta quando a fatura é paga (ver ContasCartoes.jsx /
-      // pagar_fatura_cartao no banco), então aqui é sempre um ou outro.
-      const [modo, id] = pagoCom ? pagoCom.split(":") : [null, null];
-      const { error } = await supabase.from("lancamentos").insert({
-        familia_id: membroLogado.familia_id,
-        membro_id: membroId,
-        tipo, categoria, valor: Number(valor), descricao: descricao.trim() || null, data,
-        conta_id: modo === "conta" ? id : null,
-        cartao_id: modo === "cartao" ? id : null,
-        tag: tag.trim() || null,
-      });
-      if (error) throw error;
-      setValor(""); setDescricao(""); setTag(""); setPagoCom("");
-      onSalvo();
-    } catch (e) {
-      setErro(e.message || "Erro ao salvar.");
-    } finally {
-      setSalvando(false);
-    }
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, onMembroAtualizado, onSalvo }) {
+  if (tela?.startsWith("cartao:")) {
+    const cartaoId = tela.split(":")[1];
+    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
   }
+  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
+  if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} />;
+  if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} />;
+  if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} />;
+  if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
+  if (tela === "importar") return <ImportarArquivo membro={membro} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
+  if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
 
   return (
-    <form style={cardStyle} onSubmit={salvar}>
-      <div style={h2}>NOVO LANÇAMENTO</div>
-      {erro && <div style={{ color: C.danger, fontSize: 13, marginBottom: 8 }}>{erro}</div>}
-      <div style={row}>
-        <select style={select} value={tipo} onChange={(e) => setTipo(e.target.value)}>
-          <option value="gasto">Gasto</option>
-          <option value="receita">Receita</option>
-        </select>
-        <select style={select} value={categoria} onChange={(e) => setCategoria(e.target.value)}>
-          {CATEGORIAS.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select style={select} value={membroId} onChange={(e) => setMembroId(e.target.value)}>
-          {membros.map((m) => <option key={m.id} value={m.id}>{m.nome}</option>)}
-        </select>
-      </div>
-      <div style={{ ...row, marginTop: 10 }}>
-        <input style={input} type="number" step="0.01" placeholder="Valor" value={valor} onChange={(e) => setValor(e.target.value)} />
-        <input style={{ ...input, flex: "2 1 200px" }} placeholder="Descrição (opcional)" value={descricao} onChange={(e) => setDescricao(e.target.value)} />
-        <input style={input} type="date" value={data} onChange={(e) => setData(e.target.value)} />
-      </div>
-      <div style={{ ...row, marginTop: 10 }}>
-        <select style={{ ...select, flex: "1 1 200px" }} value={pagoCom} onChange={(e) => setPagoCom(e.target.value)}>
-          <option value="">Pago com — não informado</option>
-          {contas.length > 0 && (
-            <optgroup label="Contas">
-              {contas.map((c) => <option key={c.id} value={`conta:${c.id}`}>{c.nome}</option>)}
-            </optgroup>
-          )}
-          {cartoes.length > 0 && (
-            <optgroup label="Cartões de crédito">
-              {cartoes.map((k) => <option key={k.id} value={`cartao:${k.id}`}>{k.nome}</option>)}
-            </optgroup>
-          )}
-        </select>
-        <input style={input} placeholder="Tag (opcional, ex: Casamento)" value={tag} onChange={(e) => setTag(e.target.value)} />
-      </div>
-      <div style={{ marginTop: 12 }}>
-        <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Lançar"}</button>
-      </div>
-    </form>
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 4 }}>Mais</div>
+      {[
+        ["contas", "Contas e cartões"],
+        ["assinaturas", "Assinaturas"],
+        ["investimentos", "Investimentos"],
+        ["relatorios", "Relatórios"],
+        ["chat", "Falar com o COSMO"],
+        ["importar", "Importar e anexar"],
+        ["membros", "Membros e permissões"],
+      ].map(([chave, label]) => (
+        <button key={chave} onClick={() => setTela(chave)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 18px", fontSize: 14, fontWeight: 700, color: C.ink, cursor: "pointer", textAlign: "left" }}>
+          {label} <span style={{ color: C.inkFaint }}>›</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
-function GerenciarMembros({ membros, membroLogado, onAtualizado }) {
+function BarraInferior({ aba, onEscolher }) {
+  return (
+    <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, display: "grid", gridTemplateColumns: "repeat(4,1fr)", padding: "10px 0 14px 0", maxWidth: 720, margin: "0 auto" }}>
+      {ABAS_PRINCIPAIS.map((a) => (
+        <button key={a.chave} onClick={() => onEscolher(a.chave)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, border: "none", background: "transparent", cursor: "pointer" }}>
+          <div style={{ width: 8, height: 8, borderRadius: "50%", background: aba === a.chave ? C.accent : "#C6CAD6" }} />
+          <span style={{ fontSize: 10, fontWeight: 800, color: aba === a.chave ? C.accent : "#9AA2B5" }}>{a.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function GerenciarMembros({ membros, membroLogado, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
 
   return (
     <div style={cardStyle}>
-      <div style={h2}>MEMBROS DA FAMÍLIA</div>
+      {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>‹ Voltar</button>}
+      <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 12 }}>MEMBROS DA FAMÍLIA</div>
       {membros.map((m) => <MembroCard key={m.id} membro={m} souEu={m.id === membroLogado.id} onAtualizado={onAtualizado} />)}
       {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro (convidar por e-mail)</button>}
       {mostrarForm && <AdicionarMembro familiaId={membroLogado.familia_id} onSalvo={() => { setMostrarForm(false); onAtualizado(); }} onCancelar={() => setMostrarForm(false)} />}
@@ -334,7 +265,7 @@ function AdicionarMembro({ familiaId, onSalvo, onCancelar }) {
   return (
     <form onSubmit={salvar} style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}` }}>
       {erro && <div style={{ color: C.danger, fontSize: 13, marginBottom: 8 }}>{erro}</div>}
-      <div style={row}>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <input style={input} placeholder="Nome (ex: Alessia)" value={nome} onChange={(e) => setNome(e.target.value)} required />
         <input style={input} type="email" placeholder="E-mail dela" value={email} onChange={(e) => setEmail(e.target.value)} required />
         <input style={input} type="number" step="0.01" placeholder="Mesada mensal" value={mesada} onChange={(e) => setMesada(e.target.value)} />
