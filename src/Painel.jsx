@@ -1,18 +1,33 @@
 import React, { useMemo, useState } from "react";
 import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
+import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight } from "./Icons.jsx";
 
 // Painel principal — redesenhado pra ser só um resumo (saldo do casal), duas
 // ações principais (lançar ou falar com o COSMO), atalhos, e uma seção de
 // "widgets" modulares. Widgets de verdade na tela inicial do celular (fora
 // do app) exigiriam um app nativo — aqui são cartões dentro do próprio app.
+//
+// Os ícones e os detalhes decorativos (o brilho desfocado no cartão de saldo,
+// a saudação, o "toque para reordenar") vêm direto do mockup aprovado no
+// Design Canvas — a primeira versão portada trocou tudo isso por quadradinhos
+// de cor sólida, o que deixou a tela com cara de esqueleto em vez do app
+// "de banco de verdade" que foi desenhado.
 
 const shortcuts = [
-  { chave: "contas", label: "Contas", cor: C.accent, corSoft: C.accentSoft },
-  { chave: "assinaturas", label: "Assinaturas", cor: C.purple, corSoft: C.purpleSoft },
-  { chave: "importar", label: "Anexar", cor: C.accent, corSoft: C.accentSoft },
-  { chave: "relatorios", label: "Relatórios", cor: C.accent, corSoft: C.accentSoft },
+  { chave: "contas", label: "Contas", cor: C.accent, corSoft: C.accentSoft, Icone: IconCard },
+  { chave: "assinaturas", label: "Assinaturas", cor: C.purple, corSoft: C.purpleSoft, Icone: IconRefresh },
+  { chave: "importar", label: "Anexar", cor: C.accent, corSoft: C.accentSoft, Icone: IconUpload },
+  { chave: "relatorios", label: "Relatórios", cor: C.accent, corSoft: C.accentSoft, Icone: IconBarChart },
 ];
+
+function saudacao() {
+  const h = new Date().getHours();
+  if (h < 5) return "Boa madrugada";
+  if (h < 12) return "Bom dia";
+  if (h < 18) return "Boa tarde";
+  return "Boa noite";
+}
 
 export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, onNavegar, onSalvo }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
@@ -21,6 +36,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
   const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
   const totalReceitas = useMemo(() => doMes.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
   const saldo = totalReceitas - totalGastos;
+  const primeiroNome = (membro?.nome || "").split(" ")[0];
 
   const cartaoPrincipal = cartoes[0];
   const abertoCartaoPrincipal = useMemo(() => {
@@ -58,18 +74,35 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      {primeiroNome && (
+        <div style={{ fontSize: 13, color: C.inkMute, fontWeight: 600, marginTop: -8 }}>
+          {saudacao()}, {primeiroNome} — aqui está o resumo do casal.
+        </div>
+      )}
+
       <div style={{ position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${C.navy} 0%, ${C.navyDeep} 100%)`, borderRadius: 22, padding: 24, color: "#fff" }}>
-        <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.65)" }}>Saldo total do casal</div>
-        <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", marginTop: 4 }}>{moeda(saldo)}</div>
-        <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
-          <LegendaSaldo cor="#4CE0AB" texto={`Receitas ${moeda(totalReceitas)}`} />
-          <LegendaSaldo cor="#FF9A9E" texto={`Gastos ${moeda(totalGastos)}`} />
+        <div style={{ position: "absolute", width: 160, height: 160, borderRadius: "50%", background: C.gold, opacity: 0.16, filter: "blur(38px)", top: -50, right: -30 }} />
+        <div style={{ position: "relative" }}>
+          <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.65)" }}>Saldo total do casal</div>
+          <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", marginTop: 4 }}>{moeda(saldo)}</div>
+          <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
+            <LegendaSaldo cor="#4CE0AB" texto={`Receitas ${moeda(totalReceitas)}`} />
+            <LegendaSaldo cor="#FF9A9E" texto={`Gastos ${moeda(totalGastos)}`} />
+          </div>
         </div>
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-        <button onClick={() => setLancamentoAberto(true)} style={botaoPrincipal(C.accent, "#fff")}>+ Novo lançamento</button>
-        <button onClick={() => onNavegar("chat")} style={botaoPrincipal("#fff", C.ink, C.lineStrong)}>Falar com o COSMO</button>
+        <button onClick={() => setLancamentoAberto(true)} style={{ ...botaoPrincipal(C.accent, "#fff"), display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <IconPlus size={20} color="#fff" strokeWidth={2.3} />
+          Novo lançamento
+        </button>
+        <button onClick={() => onNavegar("chat")} style={{ ...botaoPrincipal("#fff", C.ink, C.lineStrong), display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 20, height: 20, borderRadius: "50%", background: `linear-gradient(135deg, ${C.accent} 0%, ${C.navyDeep} 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <IconCosmo size={11} color="#fff" strokeWidth={2.1} />
+          </div>
+          Falar com o COSMO
+        </button>
       </div>
 
       {lancamentoAberto && (
@@ -83,7 +116,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
         {shortcuts.map((s) => (
           <button key={s.chave} onClick={() => onNavegar(s.chave)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: "none", background: "transparent", cursor: "pointer" }}>
             <div style={{ width: 46, height: 46, borderRadius: 14, background: s.corSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
-              <div style={{ width: 18, height: 18, borderRadius: 5, background: s.cor }} />
+              <s.Icone size={20} color={s.cor} strokeWidth={1.8} />
             </div>
             <span style={{ fontSize: 10.5, fontWeight: 700, color: C.ink }}>{s.label}</span>
           </button>
@@ -91,12 +124,16 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       </div>
 
       <div>
-        <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, marginBottom: 10 }}>Seus widgets</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Seus widgets</div>
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint }}>toque para reordenar</div>
+        </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
 
           {cartaoPrincipal && (
-            <button onClick={() => onNavegar(`cartao:${cartaoPrincipal.id}`)} style={{ ...widgetBase, background: `linear-gradient(135deg, ${instCartao.cor} 0%, ${instCartao.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
-              <div>
+            <button onClick={() => onNavegar(`cartao:${cartaoPrincipal.id}`)} style={{ ...widgetBase, position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${instCartao.cor} 0%, ${instCartao.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
+              <div style={{ position: "absolute", width: 100, height: 100, borderRadius: "50%", background: "#fff", opacity: 0.08, filter: "blur(24px)", top: -30, right: -20 }} />
+              <div style={{ position: "relative" }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.65)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{cartaoPrincipal.nome}</div>
                 <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{moeda(abertoCartaoPrincipal)}</div>
                 {disponivelCartao != null && (
@@ -105,7 +142,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
                   </div>
                 )}
               </div>
-              <span style={{ fontSize: 18 }}>›</span>
+              <IconChevronRight size={15} color="rgba(255,255,255,0.7)" strokeWidth={2.3} style={{ position: "relative", flexShrink: 0 }} />
             </button>
           )}
 
@@ -113,7 +150,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
             <button onClick={() => onNavegar("assinaturas")} style={{ ...widgetBase, background: "#fff", border: `1px solid ${C.line}`, cursor: "pointer", textAlign: "left" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ width: 38, height: 38, borderRadius: 11, background: C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                  <div style={{ width: 16, height: 16, borderRadius: 4, background: C.purple }} />
+                  <IconRefresh size={18} color={C.purple} strokeWidth={1.9} />
                 </div>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>Assinaturas</div>
@@ -126,7 +163,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
 
           {insight && (
             <div style={{ display: "flex", gap: 11, background: C.navy, borderRadius: 16, padding: "14px 16px", alignItems: "flex-start" }}>
-              <div style={{ width: 18, height: 18, borderRadius: "50%", background: C.gold, flexShrink: 0, marginTop: 1 }} />
+              <IconCosmo size={18} color={C.gold} strokeWidth={1.9} style={{ flexShrink: 0, marginTop: 1 }} />
               <div>
                 <div style={{ fontSize: 11.5, fontWeight: 800, color: C.gold, marginBottom: 2 }}>Percebido pelo COSMO</div>
                 <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,0.85)", lineHeight: 1.4 }}>{insight}</div>

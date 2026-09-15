@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, FRENTES_GASTO, FONTES_RECEITA, instituicaoDe, moeda, somarMeses } from "./theme.js";
+import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, IconCard, IconCreditCard, IconClose } from "./Icons.jsx";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
 // conta/cartão (cores por instituição) e, quando o pagamento é num cartão,
@@ -100,7 +101,9 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
       <div style={{ display: "flex", gap: 8 }}>
         <ChipToggle ativo={tipo === "gasto"} cor={C.coral} onClick={() => trocarTipo("gasto")}>Gasto</ChipToggle>
         <ChipToggle ativo={tipo === "receita"} cor={C.green} onClick={() => trocarTipo("receita")}>Receita</ChipToggle>
-        <button type="button" onClick={onFechar} style={{ marginLeft: "auto", border: "none", background: "transparent", color: C.inkFaint, fontSize: 13, cursor: "pointer" }}>fechar ✕</button>
+        <button type="button" onClick={onFechar} style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 4, border: "none", background: "transparent", color: C.inkFaint, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+          fechar <IconClose size={13} color={C.inkFaint} strokeWidth={2.2} />
+        </button>
       </div>
 
       <div>
@@ -115,11 +118,15 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
       <div>
         <Label>{tipo === "receita" ? "Fonte" : "Frente de gasto"}</Label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
-          {opcoesCategoria.map((op) => (
-            <ChipToggle key={op.chave} ativo={categoria === op.chave} cor={tipo === "receita" ? C.green : op.cor} onClick={() => setCategoria(op.chave)}>
-              {op.label}
-            </ChipToggle>
-          ))}
+          {opcoesCategoria.map((op) => {
+            const IconeOp = (tipo === "receita" ? ICONE_FONTE_RECEITA : ICONE_FRENTE_GASTO)[op.chave];
+            return (
+              <ChipToggle key={op.chave} ativo={categoria === op.chave} cor={tipo === "receita" ? C.green : op.cor} onClick={() => setCategoria(op.chave)}>
+                {IconeOp && <IconeOp size={14} color={categoria === op.chave ? "#fff" : C.inkMute} strokeWidth={2} />}
+                {op.label}
+              </ChipToggle>
+            );
+          })}
         </div>
       </div>
 
@@ -130,16 +137,20 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
             <ChipToggle ativo={pagoCom === ""} cor={C.inkMute} onClick={() => setPagoCom("")}>Não informar</ChipToggle>
             {contas.map((c) => {
               const inst = instituicaoDe(c.instituicao || c.nome);
+              const ativo = pagoCom === `conta:${c.id}`;
               return (
-                <ChipToggle key={`conta:${c.id}`} ativo={pagoCom === `conta:${c.id}`} cor={inst.cor} onClick={() => setPagoCom(`conta:${c.id}`)}>
+                <ChipToggle key={`conta:${c.id}`} ativo={ativo} cor={inst.cor} onClick={() => setPagoCom(`conta:${c.id}`)}>
+                  <IconCard size={14} color={ativo ? "#fff" : C.inkMute} strokeWidth={2} />
                   {c.nome}{c.titular ? ` (${c.titular})` : ""}
                 </ChipToggle>
               );
             })}
             {tipo === "gasto" && cartoes.map((k) => {
               const inst = instituicaoDe(k.bandeira || k.nome);
+              const ativo = pagoCom === `cartao:${k.id}`;
               return (
-                <ChipToggle key={`cartao:${k.id}`} ativo={pagoCom === `cartao:${k.id}`} cor={inst.cor} onClick={() => setPagoCom(`cartao:${k.id}`)}>
+                <ChipToggle key={`cartao:${k.id}`} ativo={ativo} cor={inst.cor} onClick={() => setPagoCom(`cartao:${k.id}`)}>
+                  <IconCreditCard size={14} color={ativo ? "#fff" : C.inkMute} strokeWidth={2} />
                   {k.nome}{k.titular ? ` (${k.titular})` : ""}
                 </ChipToggle>
               );
@@ -194,6 +205,7 @@ function ChipToggle({ ativo, cor, onClick, children, type = "button" }) {
       type={type}
       onClick={onClick}
       style={{
+        display: "flex", alignItems: "center", gap: 6,
         padding: "8px 14px", borderRadius: 100, fontSize: 12.5, fontWeight: 700, cursor: "pointer",
         border: `1.5px solid ${ativo ? cor : C.line}`,
         background: ativo ? cor : "#fff",

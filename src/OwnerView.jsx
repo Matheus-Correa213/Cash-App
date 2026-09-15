@@ -11,6 +11,7 @@ import Relatorios from "./Relatorios.jsx";
 import Assinaturas from "./Assinaturas.jsx";
 import ChatCosmo from "./ChatCosmo.jsx";
 import ImportarArquivo from "./ImportarArquivo.jsx";
+import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers } from "./Icons.jsx";
 
 const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingBottom: 90 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
@@ -25,10 +26,10 @@ const btnGhost = { padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.
 // e fica guardado num "tela" à parte pra poder empilhar (ex: entrar num
 // cartão específico a partir de Contas).
 const ABAS_PRINCIPAIS = [
-  { chave: "painel", label: "Painel" },
-  { chave: "receitas", label: "Receitas" },
-  { chave: "gastos", label: "Gastos" },
-  { chave: "mais", label: "Mais" },
+  { chave: "painel", label: "Painel", Icone: IconHomeNav },
+  { chave: "receitas", label: "Receitas", Icone: IconArrowUp },
+  { chave: "gastos", label: "Gastos", Icone: IconArrowDown },
+  { chave: "mais", label: "Mais", Icone: IconGrid },
 ];
 
 export default function OwnerView({ membro, onMembroAtualizado }) {
@@ -134,20 +135,28 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, onMembroAtu
   if (tela === "importar") return <ImportarArquivo membro={membro} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
 
+  const itens = [
+    { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "assinaturas", label: "Assinaturas", Icone: IconRefresh, cor: C.purple, corSoft: C.purpleSoft },
+    { chave: "investimentos", label: "Investimentos", Icone: IconTrendingUp, cor: C.green, corSoft: C.greenSoft },
+    { chave: "relatorios", label: "Relatórios", Icone: IconBarChart, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "chat", label: "Falar com o COSMO", Icone: IconCosmo, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "importar", label: "Importar e anexar", Icone: IconUpload, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "membros", label: "Membros e permissões", Icone: IconUsers, cor: C.purple, corSoft: C.purpleSoft },
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 4 }}>Mais</div>
-      {[
-        ["contas", "Contas e cartões"],
-        ["assinaturas", "Assinaturas"],
-        ["investimentos", "Investimentos"],
-        ["relatorios", "Relatórios"],
-        ["chat", "Falar com o COSMO"],
-        ["importar", "Importar e anexar"],
-        ["membros", "Membros e permissões"],
-      ].map(([chave, label]) => (
-        <button key={chave} onClick={() => setTela(chave)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "16px 18px", fontSize: 14, fontWeight: 700, color: C.ink, cursor: "pointer", textAlign: "left" }}>
-          {label} <span style={{ color: C.inkFaint }}>›</span>
+      {itens.map((it) => (
+        <button key={it.chave} onClick={() => setTela(it.chave)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: "13px 16px", fontSize: 14, fontWeight: 700, color: C.ink, cursor: "pointer", textAlign: "left" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 11, background: it.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <it.Icone size={17} color={it.cor} strokeWidth={1.9} />
+            </div>
+            {it.label}
+          </div>
+          <IconChevronRight size={16} color={C.inkFaint} strokeWidth={2.2} />
         </button>
       ))}
     </div>
@@ -159,7 +168,7 @@ function BarraInferior({ aba, onEscolher }) {
     <div style={{ position: "fixed", bottom: 0, left: 0, right: 0, background: "#fff", borderTop: `1px solid ${C.line}`, display: "grid", gridTemplateColumns: "repeat(4,1fr)", padding: "10px 0 14px 0", maxWidth: 720, margin: "0 auto" }}>
       {ABAS_PRINCIPAIS.map((a) => (
         <button key={a.chave} onClick={() => onEscolher(a.chave)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, border: "none", background: "transparent", cursor: "pointer" }}>
-          <div style={{ width: 8, height: 8, borderRadius: "50%", background: aba === a.chave ? C.accent : "#C6CAD6" }} />
+          <a.Icone size={20} color={aba === a.chave ? C.accent : "#9AA2B5"} strokeWidth={aba === a.chave ? 2 : 1.9} />
           <span style={{ fontSize: 10, fontWeight: 800, color: aba === a.chave ? C.accent : "#9AA2B5" }}>{a.label}</span>
         </button>
       ))}

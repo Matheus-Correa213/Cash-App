@@ -88,11 +88,15 @@ export function frenteDe(categoria) {
 // Receitas usa sempre o verde), mas nomeadas pra manter o vocabulário da
 // doutrina financeira consistente em toda a família de apps do COSMO.
 export const FONTES_RECEITA = [
-  { chave: "trabalho", label: "Trabalho principal" },
-  { chave: "correa_books", label: "Corrêa Books" },
-  { chave: "freelas", label: "Freelas" },
-  { chave: "outros", label: "Outros" },
+  { chave: "trabalho", label: "Trabalho principal", cor: "#0469FB", corSoft: "#E7F0FE" },
+  { chave: "correa_books", label: "Corrêa Books", cor: "#E85D8A", corSoft: "#FDE9F0" },
+  { chave: "freelas", label: "Freelas", cor: "#E3A400", corSoft: "#FFF6DA" },
+  { chave: "outros", label: "Outros", cor: "#9AA2B5", corSoft: "#EEF0F6" },
 ];
+
+export function fonteDe(categoria) {
+  return FONTES_RECEITA.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line };
+}
 
 export function moeda(v) {
   return `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`;

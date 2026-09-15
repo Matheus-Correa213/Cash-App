@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, FRENTES_GASTO, FONTES_RECEITA, frenteDe, instituicaoDe, moeda } from "./theme.js";
+import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
@@ -79,8 +80,10 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "70vh", background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, overflow: "hidden" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 18px", borderBottom: `1px solid ${C.line}` }}>
-        {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, cursor: "pointer" }}>‹</button>}
-        <div style={{ width: 34, height: 34, borderRadius: "50%", background: `linear-gradient(135deg, ${C.accent} 0%, ${C.navyDeep} 100%)` }} />
+        {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, cursor: "pointer", display: "flex" }}><IconChevronLeft size={20} color={C.ink} strokeWidth={2.2} /></button>}
+        <div style={{ width: 34, height: 34, borderRadius: "50%", background: `linear-gradient(135deg, ${C.accent} 0%, ${C.navyDeep} 100%)`, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <IconCosmoFull size={16} color="#fff" strokeWidth={1.9} />
+        </div>
         <div>
           <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>COSMO · Finanças</div>
           <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>sincronizado com Correa Cash</div>
@@ -108,13 +111,17 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
         style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderTop: `1px solid ${C.line}` }}
       >
         <input ref={inputArquivo} type="file" accept="image/*" hidden onChange={onEscolherArquivo} />
-        <button type="button" onClick={() => inputArquivo.current?.click()} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.line, cursor: "pointer" }} title="Anexar foto">📎</button>
+        <button type="button" onClick={() => inputArquivo.current?.click()} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.line, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} title="Anexar foto">
+          <IconReceiptScan size={16} color={C.inkMute} strokeWidth={1.9} />
+        </button>
         <input
           value={texto} onChange={(e) => setTexto(e.target.value)}
           placeholder="Fale com o COSMO ou anexe um arquivo…"
           style={{ flex: 1, padding: "10px 16px", borderRadius: 100, border: `1px solid ${C.line}`, fontSize: 13.5 }}
         />
-        <button type="submit" disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.accent, color: "#fff", cursor: "pointer" }}>➤</button>
+        <button type="submit" disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.accent, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <IconSend size={15} color="#fff" strokeWidth={2.1} />
+        </button>
       </form>
     </div>
   );

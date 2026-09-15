@@ -1,6 +1,7 @@
 import React, { useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, frenteDe, FONTES_RECEITA, moeda } from "./theme.js";
+import { IconUpload } from "./Icons.jsx";
 
 // Importar e anexar — lê PDF/Word/foto e propõe lançamentos pra revisão.
 // Mesmo princípio do chat: o COSMO nunca lança nada de arquivo sozinho.
@@ -80,7 +81,9 @@ export default function ImportarArquivo({ membro, onVoltar, onSalvo }) {
 
       <input ref={inputRef} type="file" accept="application/pdf,.docx,image/*" hidden onChange={onEscolherArquivo} />
       <div style={{ background: C.card, border: `1.5px dashed ${C.lineStrong}`, borderRadius: 18, padding: "26px 20px", display: "flex", flexDirection: "column", alignItems: "center", gap: 10, textAlign: "center" }}>
-        <div style={{ width: 50, height: 50, borderRadius: 14, background: C.accentSoft }} />
+        <div style={{ width: 50, height: 50, borderRadius: 14, background: C.accentSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <IconUpload size={22} color={C.accent} strokeWidth={1.9} />
+        </div>
         <span style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Anexar PDF, Word ou foto</span>
         <span style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, lineHeight: 1.4 }}>Extrato do banco, resumo de gastos em Word, ou foto de um comprovante — o COSMO lê e sugere os lançamentos.</span>
         <button onClick={() => inputRef.current?.click()} disabled={processando} style={{ background: C.accent, borderRadius: 10, padding: "10px 22px", marginTop: 6, border: "none", color: "#fff", fontWeight: 800, fontSize: 12.5, cursor: "pointer" }}>
