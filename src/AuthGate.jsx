@@ -103,6 +103,14 @@ function traduzErro(msg) {
   return msg;
 }
 
+// As mensagens de erro das funções criar_minha_familia()/reivindicar_convite() (ver
+// supabase-schema.sql) já vêm em português, direto do "raise exception" no banco — só
+// precisamos limpar o prefixo técnico que o Postgres/PostgREST gruda na frente.
+function traduzErroServidor(msg) {
+  if (!msg) return "";
+  return msg.replace(/^.*?:\s*/, "");
+}
+
 // Depois do login, decide o que mostrar: o app de verdade (se já existe um
 // registro em "membros" ligado a este login), a tela de reivindicar um
 // convite (se o dono já cadastrou este e-mail antes), ou a tela de criar a
@@ -137,12 +145,15 @@ function MembroGate({ session }) {
   async function reivindicarConvite() {
     setEstado("carregando");
     try {
-      const email = session.user.email;
-      const { error } = await supabase.from("membros").update({ user_id: session.user.id }).is("user_id", null).ilike("email", email);
+      // Correção 15/09/2026: chamar a função reivindicar_convite() no banco, em vez de
+      // fazer o update direto pela tabela — ver o comentário em criar() logo abaixo, é o
+      // mesmo motivo (evita depender do RLS bater exatamente no primeiro request depois
+      // do login/confirmação de e-mail).
+      const { error } = await supabase.rpc("reivindicar_convite");
       if (error) throw error;
       await carregar();
     } catch (e) {
-      setErro(e.message || "Não consegui vincular seu convite.");
+      setErro(traduzErroServidor(e.message) || "Não consegui vincular seu convite.");
       setEstado("erro");
     }
   }
@@ -195,21 +206,21 @@ function CriarFamilia({ session, onCriada, onSair }) {
     e.preventDefault();
     setErro(""); setCarregando(true);
     try {
-      const { data: familia, error: e1 } = await supabase
-        .from("familias").insert({ dono_user_id: session.user.id, nome: `Família ${nome.trim() || "Corrêa"}` }).select().single();
-      if (e1) throw e1;
-      const { error: e2 } = await supabase.from("membros").insert({
-        familia_id: familia.id,
-        user_id: session.user.id,
-        email: session.user.email,
-        nome: nome.trim() || "Administrador(a)",
-        papel: "dono",
-        permissoes: { ver_saldo_geral: true, ver_gastos_dono: true, ver_resumo_categorias: true },
-      });
-      if (e2) throw e2;
+      // Correção 15/09/2026: antes eram DOIS inserts separados feitos pelo navegador
+      // (familias, depois membros), cada um checado pela política de RLS contra
+      // auth.uid(). Na prática, logo depois de confirmar o e-mail/entrar pela primeira
+      // vez, isso deu "new row violates row-level security policy" — e mesmo corrigindo
+      // o motivo exato, dois inserts separados sempre deixam uma brecha: se o primeiro
+      // desse certo e o segundo falhasse, o Matheus ficaria com uma família órfã, sem
+      // membro nenhum, e travado sem conseguir tentar de novo (nome já "usado").
+      // A troca: uma função no próprio banco (criar_minha_familia), que roda os dois
+      // inserts como UMA operação só, usando auth.uid() direto no servidor — nunca o
+      // que o navegador manda — e nunca deixa a metade do trabalho feita.
+      const { error } = await supabase.rpc("criar_minha_familia", { p_nome: nome.trim() });
+      if (error) throw error;
       onCriada();
     } catch (e) {
-      setErro(e.message || "Não consegui criar a família.");
+      setErro(traduzErroServidor(e.message) || "Não consegui criar a família.");
     } finally {
       setCarregando(false);
     }
