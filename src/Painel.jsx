@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
@@ -51,7 +51,36 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
   const doMes = useMemo(() => lancamentos.filter((l) => l.data >= inicioMesISO()), [lancamentos]);
   const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
   const totalReceitas = useMemo(() => doMes.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
-  const saldo = totalReceitas - totalGastos;
+
+  // BUG CORRIGIDO (16/09/2026): "Saldo total do casal" estava sendo calculado
+  // como receitas-do-mês menos gastos-do-mês — ou seja, o fluxo de caixa do
+  // mês, não o dinheiro que existe de verdade. Isso é por isso que o Painel
+  // mostrava R$ 0,00 mesmo com R$ 1.630,62 reais espalhados pelas contas: uma
+  // atualização de saldo feita pelo chat do COSMO mexe direto em
+  // `contas.saldo_inicial`, nunca cria um lançamento, então nunca entrava
+  // nessa conta. Agora o saldo real vem da mesma fonte que a tela de Contas e
+  // cartões já usa e mostra certinho — a função `saldos_contas()` do banco
+  // (saldo_inicial + lançamentos daquela conta), com o mesmo recorte dela:
+  // contas bancárias + carteiras físicas, sem poupança (tratada à parte) e
+  // sem entrar no crédito disponível dos cartões (que é uma dívida, não
+  // dinheiro em caixa). Os dois números continuam mostrando a mesma coisa nas
+  // duas telas.
+  const [saldosContas, setSaldosContas] = useState({});
+  useEffect(() => {
+    let cancelado = false;
+    supabase.rpc("saldos_contas").then(({ data, error }) => {
+      if (cancelado) return;
+      if (error) { console.error("Não consegui buscar os saldos reais das contas:", error.message); return; }
+      setSaldosContas(Object.fromEntries((data || []).map((r) => [r.conta_id, r.saldo])));
+    });
+    return () => { cancelado = true; };
+  }, [membro?.familia_id]);
+  const saldoTotalCasal = useMemo(() => {
+    return contas
+      .filter((c) => c.tipo !== "poupanca")
+      .reduce((s, c) => s + Number(saldosContas[c.id] ?? c.saldo_inicial ?? 0), 0);
+  }, [contas, saldosContas]);
+  const saldo = saldoTotalCasal;
   const primeiroNome = (membro?.nome || "").split(" ")[0];
 
   const assinaturasAtivas = (assinaturas || []).filter((a) => a.ativo);
