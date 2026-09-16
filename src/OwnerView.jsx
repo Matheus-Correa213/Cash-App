@@ -201,7 +201,7 @@ function GerenciarMembros({ membros, membroLogado, contas, cartoes, onAtualizado
       {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>‹ Voltar</button>}
       <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 12 }}>MEMBROS DA FAMÍLIA</div>
       {membros.map((m) => <MembroCard key={m.id} membro={m} contas={contas} cartoes={cartoes} souEu={m.id === membroLogado.id} onAtualizado={onAtualizado} />)}
-      {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro (convidar por e-mail)</button>}
+      {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro</button>}
       {mostrarForm && <AdicionarMembro familiaId={membroLogado.familia_id} onSalvo={() => { setMostrarForm(false); onAtualizado(); }} onCancelar={() => setMostrarForm(false)} />}
     </div>
   );
@@ -339,10 +339,10 @@ function AdicionarMembro({ familiaId, onSalvo, onCancelar }) {
         <input style={input} type="number" step="0.01" placeholder="Mesada mensal" value={mesada} onChange={(e) => setMesada(e.target.value)} />
       </div>
       <div style={{ fontSize: 12, color: C.inkFaint, margin: "8px 0" }}>
-        Ela precisa criar a conta no Cash App usando ESTE MESMO e-mail — assim que ela entrar pela primeira vez, o app liga a conta dela sozinho.
+        O Cash App não manda nenhum e-mail sozinho — avise você mesmo a ela. Ela precisa abrir o app e criar a conta dela usando ESTE MESMO e-mail (em "Ainda não tem conta? Criar uma"); assim que ela entrar pela primeira vez, o app liga a conta dela à sua família sozinho.
       </div>
       <div style={{ display: "flex", gap: 8 }}>
-        <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Convidar"}</button>
+        <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Salvar"}</button>
         <button type="button" style={btnGhost} onClick={onCancelar}>Cancelar</button>
       </div>
     </form>

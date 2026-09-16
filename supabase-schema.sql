@@ -282,8 +282,27 @@ begin
 end;
 $$;
 
+-- Só responde SIM/NÃO pra "existe um convite pendente pro meu e-mail" — usada
+-- pelo AuthGate ANTES de reivindicar_convite(), pra decidir se mostra a tela
+-- "Convite encontrado". Precisa ser SECURITY DEFINER (ver migração 8):
+-- uma busca comum feita pelo navegador de quem ainda não tem membro nenhum
+-- não acha o convite, porque a política de SELECT em "membros" depende de
+-- minha_familia_id(), que só existe depois de já ter um membro vinculado —
+-- sem essa função, a pessoa convidada nunca via a tela de convite e acabava
+-- criando uma família nova por engano.
+create or replace function tenho_convite_pendente()
+returns boolean
+language sql security definer stable
+as $$
+  select exists (
+    select 1 from membros
+    where user_id is null and email is not null and lower(email) = lower(auth.email())
+  );
+$$;
+
 grant execute on function criar_minha_familia(text) to authenticated;
 grant execute on function reivindicar_convite() to authenticated;
+grant execute on function tenho_convite_pendente() to authenticated;
 
 grant execute on function minha_familia_id() to authenticated;
 grant execute on function meu_papel() to authenticated;

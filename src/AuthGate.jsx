@@ -151,11 +151,19 @@ function MembroGate({ session }) {
       if (meu) { setMembro(meu); if (!silencioso) setEstado("app"); return; }
       if (silencioso) return;
 
-      const email = session.user.email;
-      const { data: convite, error: e2 } = await supabase
-        .from("membros").select("*").is("user_id", null).ilike("email", email).maybeSingle();
+      // Correção 16/09/2026: antes isso era um SELECT comum na tabela
+      // "membros" pelo navegador — mas a política de RLS que permite ver
+      // linhas de "membros" exige `familia_id = minha_familia_id()`, e
+      // minha_familia_id() só existe depois que a pessoa JÁ tem um membro
+      // vinculado. Pra quem acabou de criar a conta (ainda sem nenhum membro
+      // seu), isso sempre dava "não encontrei convite nenhum" mesmo quando
+      // existia um de verdade — e a pessoa acabava caindo em "criar família"
+      // por engano, criando uma família nova em vez de entrar na que já
+      // existia. tenho_convite_pendente() (SECURITY DEFINER, ver migração 8)
+      // faz essa checagem dentro do banco, sem esbarrar nessa trava.
+      const { data: temConvite, error: e2 } = await supabase.rpc("tenho_convite_pendente");
       if (e2) throw e2;
-      if (convite) { setEstado("convite"); return; }
+      if (temConvite) { setEstado("convite"); return; }
 
       setEstado("criar-familia");
     } catch (e) {
