@@ -175,6 +175,7 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       cartao_id: achado?.tipo === "cartao" ? achado.id : null,
     });
     if (error) throw error;
+    return `${dados.tipo === "receita" ? "Receita lançada" : "Gasto lançado"}: ${moeda(Number(dados.valor))}${dados.descricao ? ` — ${dados.descricao}` : ""}`;
   }
 
   // Normaliza um nome pra comparação tolerante (sem acento, sem espaços
@@ -210,6 +211,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   async function confirmarContaOuCartao(dados) {
     const acao = dados.acao;
     if (acao === "criar_conta") {
+      // Rede de segurança contra duplicata: mesmo se o COSMO errar e propor
+      // "criar" pra algo que já existe (foi exatamente o que causou "o
+      // sistema não atualizou nada, só apareceu 1 item errado" nas rodadas
+      // anteriores — a IA criava uma cópia nova em vez de atualizar a
+      // conta/cartão real, e a tela de Contas continuava com os valores
+      // antigos), a gente confere aqui, no navegador, se já existe algo com
+      // nome parecido ANTES de inserir. Se existir, recusa com um aviso
+      // claro em vez de duplicar silenciosamente.
+      const parecida = encontrarAlvo(contas, { nome: dados.nome });
+      if (parecida) throw new Error(`Já existe uma conta parecida com "${dados.nome}" cadastrada (chamada "${parecida.nome}") — pra não duplicar, não criei uma nova. Se era pra atualizar o saldo dela, tente de novo pedindo pro COSMO "atualizar" em vez de "cadastrar"; se são mesmo contas diferentes, use "+ Adicionar conta" direto em Contas e cartões.`);
       const { error } = await supabase.from("contas").insert({
         familia_id: membro.familia_id,
         nome: dados.nome,
@@ -220,6 +231,7 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
         visivel_para_restrito: false,
       });
       if (error) throw error;
+      return `Conta criada: ${dados.nome} (saldo inicial ${moeda(Number(dados.saldo_inicial) || 0)})`;
     } else if (acao === "atualizar_conta") {
       const alvo = encontrarAlvo(contas, dados);
       if (!alvo) throw new Error(`Não encontrei a conta "${dados.nome_existente || dados.nome}" pra atualizar — confira em Contas e cartões se o nome bate.`);
@@ -239,7 +251,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       const { data, error } = await supabase.from("contas").update(patch).eq("id", alvo.id).select();
       if (error) throw error;
       if (!data || data.length === 0) throw new Error(`A conta "${alvo.nome}" não foi atualizada — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
+      return patch.saldo_inicial !== undefined
+        ? `Conta atualizada: ${alvo.nome} — novo saldo ${moeda(patch.saldo_inicial)}`
+        : `Conta atualizada: ${alvo.nome}`;
     } else if (acao === "criar_cartao") {
+      // Mesma rede de segurança contra duplicata aplicada aos cartões — sem
+      // isso, um cartão já cadastrado que a IA tentasse "criar" de novo (em
+      // vez de "atualizar") virava uma cópia nova com fatura/limite errados,
+      // e o cartão de verdade continuava com os valores antigos na tela.
+      const parecido = encontrarAlvo(cartoes, { nome: dados.nome });
+      if (parecido) throw new Error(`Já existe um cartão parecido com "${dados.nome}" cadastrado (chamado "${parecido.nome}") — pra não duplicar, não criei um novo. Se era pra atualizar o limite/fatura dele, tente de novo pedindo pro COSMO "atualizar" em vez de "cadastrar"; se são mesmo cartões diferentes, use "+ Adicionar cartão" direto em Contas e cartões.`);
       const { error } = await supabase.from("cartoes_credito").insert({
         familia_id: membro.familia_id,
         nome: dados.nome,
@@ -251,6 +272,7 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
         visivel_para_restrito: false,
       });
       if (error) throw error;
+      return `Cartão criado: ${dados.nome} (limite ${moeda(Number(dados.limite) || 0)})`;
     } else if (acao === "atualizar_cartao") {
       const alvo = encontrarAlvo(cartoes, dados);
       if (!alvo) throw new Error(`Não encontrei o cartão "${dados.nome_existente || dados.nome}" pra atualizar — confira em Contas e cartões se o nome bate.`);
@@ -264,14 +286,23 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       const { data, error } = await supabase.from("cartoes_credito").update(patch).eq("id", alvo.id).select();
       if (error) throw error;
       if (!data || data.length === 0) throw new Error(`O cartão "${alvo.nome}" não foi atualizado — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
+      return patch.limite !== undefined
+        ? `Cartão atualizado: ${alvo.nome} — novo limite ${moeda(patch.limite)}`
+        : `Cartão atualizado: ${alvo.nome}`;
     } else {
       throw new Error("Ação desconhecida na proposta.");
     }
   }
 
+  // Devolve um texto descrevendo exatamente o que aconteceu (criou ou
+  // atualizou o quê, com qual valor) — é esse texto que fica gravado em
+  // `confirmadas` no lugar de um `true` genérico, pra quem olha o chat depois
+  // conseguir ver, item por item, se foi realmente uma ATUALIZAÇÃO da conta
+  // que já existia ou uma CRIAÇÃO nova (a confusão entre as duas foi a causa
+  // real do "confirmei e não mudou nada" — ver comentários acima).
   async function confirmarUma(proposta) {
-    if (proposta.natureza === "lancamento") await confirmarLancamento(proposta.dados);
-    else await confirmarContaOuCartao(proposta.dados);
+    if (proposta.natureza === "lancamento") return await confirmarLancamento(proposta.dados);
+    return await confirmarContaOuCartao(proposta.dados);
   }
 
   // `dbId` e `confirmadasAtual` vêm de quem chama (o `.map` de `mensagens`
@@ -280,9 +311,9 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   // desatualizado se a pessoa confirmar duas propostas rapidinho.
   async function confirmarItem(indiceMensagem, dbId, indiceProposta, proposta, confirmadasAtual) {
     try {
-      await confirmarUma(proposta);
+      const resultado = await confirmarUma(proposta);
       const novaConfirmadas = confirmadasAtual.slice();
-      novaConfirmadas[indiceProposta] = true;
+      novaConfirmadas[indiceProposta] = { ok: true, texto: resultado };
       setMensagens((m) => m.map((msg, i) => (i === indiceMensagem ? { ...msg, confirmadas: novaConfirmadas } : msg)));
       persistirConfirmadas(dbId, novaConfirmadas);
       onSalvo && onSalvo();
@@ -302,8 +333,8 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     for (let i = 0; i < propostas.length; i++) {
       if (novaConfirmadas[i]) continue;
       try {
-        await confirmarUma(propostas[i]);
-        novaConfirmadas[i] = true;
+        const resultado = await confirmarUma(propostas[i]);
+        novaConfirmadas[i] = { ok: true, texto: resultado };
         setMensagens((m) => m.map((msg, idx) => (idx === indiceMensagem ? { ...msg, confirmadas: novaConfirmadas.slice() } : msg)));
       } catch (e) {
         falhas.push(`${propostas[i].dados?.nome || propostas[i].dados?.descricao || `item ${i + 1}`}: ${e.message}`);
@@ -400,13 +431,25 @@ function Bolha({ mensagem, onConfirmar, onConfirmarTodas }) {
             Confirmar todas as {pendentes} propostas
           </button>
         )}
-        {propostas.map((proposta, idx) => (
-          mensagem.confirmadas?.[idx]
-            ? <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {proposta.natureza === "lancamento" ? "Lançado" : "Salvo"}</div>
-            : (proposta.natureza === "lancamento"
-              ? <CardProposta key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />
-              : <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />)
-        ))}
+        {propostas.map((proposta, idx) => {
+          const confirmada = mensagem.confirmadas?.[idx];
+          if (confirmada) {
+            // `confirmada` pode ser um objeto { ok, texto } (formato novo, com
+            // a descrição exata do que foi feito) ou o booleano `true` de
+            // confirmações salvas antes dessa mudança — nesse caso cai no
+            // texto genérico de sempre, sem quebrar conversas antigas.
+            const texto = (typeof confirmada === "object" && confirmada.texto) ? confirmada.texto : (proposta.natureza === "lancamento" ? "Lançado" : "Salvo");
+            return <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {texto}</div>;
+          }
+          return proposta.natureza === "lancamento"
+            ? <CardProposta key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />
+            : <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
+        })}
+        {propostas.length > 1 && pendentes === 0 && (
+          <div style={{ fontSize: 11.5, fontWeight: 800, color: C.greenTextAlt, background: C.greenBg || "rgba(0,0,0,0.03)", borderRadius: 10, padding: "8px 12px" }}>
+            ✅ Tudo aplicado — as {propostas.length} propostas desta mensagem já foram confirmadas.
+          </div>
+        )}
       </div>
     </div>
   );
