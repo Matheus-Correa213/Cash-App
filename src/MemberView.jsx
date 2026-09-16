@@ -1,3 +1,9 @@
+// APOSENTADO em 16/09/2026 (unificação do acesso da Alessia) — ninguém mais
+// importa este componente. Quem tem acesso restrito agora passa pelo mesmo
+// OwnerView.jsx que o dono (mesmos menus, mesmo visual, mesmo painel geral,
+// com os botões de edição que não são dela escondidos tela por tela) em vez
+// de cair nesta tela separada e pré-redesign. Arquivo mantido só de
+// referência histórica; pode ser removido com segurança.
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, frenteDe, fonteDe } from "./theme.js";

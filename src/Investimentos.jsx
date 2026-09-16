@@ -27,11 +27,18 @@ const nomeObjetivo = (o) => OBJETIVOS.find((x) => x[0] === o)?.[1] || "—";
 const nomeTipo = (t) => TIPOS.find((x) => x[0] === t)?.[1] || t;
 
 // A tela de Investimentos segue o mesmo princípio do resto do Correa Cash:
-// só o dono vê e mexe aqui (política "investimentos: so o dono ve e mexe" no
-// banco) — é visão de patrimônio do casal, não de mesada. O objetivo (curto/
-// médio/longo prazo) e a separação renda fixa x variável seguem direto o
-// que já está no DOUTRINA-ECONOMICA-COSMO.md / MEGA-DOSSIE-COSMO-FINANCEIRO.md.
-export default function Investimentos({ familiaId }) {
+// só o dono vê e mexe aqui de fato (política "investimentos: so o dono ve e
+// mexe" no banco) — é visão de patrimônio do casal, não de mesada. O
+// objetivo (curto/médio/longo prazo) e a separação renda fixa x variável
+// seguem direto o que já está no DOUTRINA-ECONOMICA-COSMO.md /
+// MEGA-DOSSIE-COSMO-FINANCEIRO.md.
+//
+// Unificação do acesso da Alessia (16/09/2026): esta tela passou a aparecer
+// também no "Mais" de quem tem acesso restrito (mesmos menus, como pedido).
+// Como o RLS bloqueia até a LEITURA pra quem não é dono, a lista sempre
+// chega vazia pra ela — sem o aviso abaixo, isso pareceria "nenhum
+// investimento cadastrado ainda", o que não é verdade, só está escondido.
+export default function Investimentos({ familiaId, podeEditar = true }) {
   const [itens, setItens] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
@@ -78,6 +85,14 @@ export default function Investimentos({ familiaId }) {
   }, [itens]);
 
   if (carregando) return <div style={cardStyle}>Carregando…</div>;
+
+  if (!podeEditar && itens.length === 0) {
+    return (
+      <div style={cardStyle}>
+        <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Investimentos são geridos pelo administrador da família.</div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -130,13 +145,13 @@ export default function Investimentos({ familiaId }) {
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                 <span style={{ fontSize: 15, fontWeight: 700, color: C.ink }}>{moeda(i.valor_atual)}</span>
                 <span style={{ fontSize: 12, color: g >= 0 ? C.accent : C.danger }}>{g >= 0 ? "+" : ""}{moeda(g)}</span>
-                <button style={btnGhost} onClick={() => excluir(i.id)}>Excluir</button>
+                {podeEditar && <button style={btnGhost} onClick={() => excluir(i.id)}>Excluir</button>}
               </div>
             </div>
           );
         })}
-        {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar investimento</button>}
-        {mostrarForm && <NovoInvestimento familiaId={familiaId} onSalvo={() => { setMostrarForm(false); carregar(); }} onCancelar={() => setMostrarForm(false)} />}
+        {podeEditar && !mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar investimento</button>}
+        {podeEditar && mostrarForm && <NovoInvestimento familiaId={familiaId} onSalvo={() => { setMostrarForm(false); carregar(); }} onCancelar={() => setMostrarForm(false)} />}
       </div>
     </div>
   );

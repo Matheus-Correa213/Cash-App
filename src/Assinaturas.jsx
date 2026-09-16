@@ -9,7 +9,12 @@ import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
 // servidor (api/verificar-assinaturas.js, chamado por um cron diário) — aqui
 // a tela só LÊ o resultado dessa checagem e mostra o estado certo.
 
-export default function Assinaturas({ familiaId, contas, cartoes, onVoltar }) {
+// podeEditar (16/09/2026, unificação do acesso da Alessia): a política de
+// RLS de assinaturas só tem "dono ve e mexe em tudo" (migração 3) — pra
+// quem tem acesso restrito, a lista sempre chega vazia (bloqueado até na
+// leitura), então escondemos os botões de cadastrar/excluir, que dariam
+// erro, e explicamos o motivo em vez de deixar parecer que não há nenhuma.
+export default function Assinaturas({ familiaId, contas, cartoes, podeEditar = true, onVoltar }) {
   const [assinaturas, setAssinaturas] = useState([]);
   const [lancamentosDoMes, setLancamentosDoMes] = useState([]);
   const [saldos, setSaldos] = useState({});
@@ -69,22 +74,26 @@ export default function Assinaturas({ familiaId, contas, cartoes, onVoltar }) {
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
         {assinaturas.map((a) => (
-          <LinhaAssinatura key={a.id} assinatura={a} lancamentosDoMes={lancamentosDoMes} saldos={saldos} cartoes={cartoes} contas={contas} hoje={hoje} onExcluir={() => excluir(a.id)} />
+          <LinhaAssinatura key={a.id} assinatura={a} lancamentosDoMes={lancamentosDoMes} saldos={saldos} cartoes={cartoes} contas={contas} hoje={hoje} podeEditar={podeEditar} onExcluir={() => excluir(a.id)} />
         ))}
-        {assinaturas.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhuma assinatura cadastrada ainda.</div>}
+        {assinaturas.length === 0 && (
+          <div style={{ color: C.inkFaint, fontSize: 13.5 }}>
+            {podeEditar ? "Nenhuma assinatura cadastrada ainda." : "Assinaturas são geridas pelo administrador da família."}
+          </div>
+        )}
       </div>
 
-      {!mostrarForm && (
+      {podeEditar && !mostrarForm && (
         <button onClick={() => setMostrarForm(true)} style={{ border: `1.5px dashed ${C.lineStrong}`, borderRadius: 16, padding: 13, background: "transparent", color: C.inkMute, fontWeight: 700, fontSize: 12.5, cursor: "pointer" }}>
           + Adicionar assinatura
         </button>
       )}
-      {mostrarForm && <NovaAssinatura familiaId={familiaId} contas={contas} cartoes={cartoes} onSalvo={() => { setMostrarForm(false); carregar(); }} onCancelar={() => setMostrarForm(false)} />}
+      {podeEditar && mostrarForm && <NovaAssinatura familiaId={familiaId} contas={contas} cartoes={cartoes} onSalvo={() => { setMostrarForm(false); carregar(); }} onCancelar={() => setMostrarForm(false)} />}
     </div>
   );
 }
 
-function LinhaAssinatura({ assinatura: a, lancamentosDoMes, saldos, cartoes, contas, hoje, onExcluir }) {
+function LinhaAssinatura({ assinatura: a, lancamentosDoMes, saldos, cartoes, contas, hoje, podeEditar, onExcluir }) {
   const inst = a.tipo_cobranca === "cartao" ? instituicaoDe((cartoes.find((c) => c.id === a.cartao_id) || {}).bandeira || (cartoes.find((c) => c.id === a.cartao_id) || {}).nome) : null;
   const lancamentoConfirmado = lancamentosDoMes.find((l) => l.assinatura_id === a.id);
 
@@ -117,7 +126,7 @@ function LinhaAssinatura({ assinatura: a, lancamentosDoMes, saldos, cartoes, con
           <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>cobra dia {a.dia_cobranca}</div>
         </div>
         <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(a.valor)}</span>
-        <button onClick={onExcluir} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>excluir</button>
+        {podeEditar && <button onClick={onExcluir} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>excluir</button>}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6, background: estado.bg, borderRadius: 100, padding: "5px 10px", width: "fit-content" }}>
         <span style={{ fontSize: 10.5, fontWeight: 700, color: estado.cor }}>{estado.texto}</span>

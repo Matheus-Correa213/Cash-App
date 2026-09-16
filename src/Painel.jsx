@@ -47,6 +47,7 @@ function saudacao() {
 export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, onNavegar, onSalvo, onMembroAtualizado }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
   const [personalizando, setPersonalizando] = useState(false);
+  const podeEditar = membro?.papel === "dono";
 
   const doMes = useMemo(() => lancamentos.filter((l) => l.data >= inicioMesISO()), [lancamentos]);
   const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
@@ -67,6 +68,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
   // duas telas.
   const [saldosContas, setSaldosContas] = useState({});
   useEffect(() => {
+    if (!podeEditar) return; // dono só — ver comentário no bloco de baixo
     let cancelado = false;
     supabase.rpc("saldos_contas").then(({ data, error }) => {
       if (cancelado) return;
@@ -74,13 +76,37 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       setSaldosContas(Object.fromEntries((data || []).map((r) => [r.conta_id, r.saldo])));
     });
     return () => { cancelado = true; };
-  }, [membro?.familia_id]);
+  }, [podeEditar, membro?.familia_id]);
   const saldoTotalCasal = useMemo(() => {
     return contas
       .filter((c) => c.tipo !== "poupanca")
       .reduce((s, c) => s + Number(saldosContas[c.id] ?? c.saldo_inicial ?? 0), 0);
   }, [contas, saldosContas]);
-  const saldo = saldoTotalCasal;
+
+  // Unificação do acesso da Alessia (16/09/2026): quando não é o dono, o
+  // "saldo total do casal" NÃO pode vir só das `contas` que chegaram aqui —
+  // essa lista já é filtrada pelo RLS pra só o que está marcado como
+  // visível pra ela (visivel_para_restrito), então somar só essas contas
+  // daria um número MENOR do que o real (o Matheus esconde de propósito
+  // algumas contas dela, mas mesmo assim quer que o saldo GERAL bata com o
+  // dele). resumo_familia_do_membro() resolve isso: é uma função do banco
+  // que enxerga TODAS as contas da família e só devolve o número agregado
+  // se a permissão "ver_saldo_geral" permitir — nunca o detalhe de cada
+  // conta escondida.
+  const [resumoRestrito, setResumoRestrito] = useState(null);
+  useEffect(() => {
+    if (podeEditar) return;
+    let cancelado = false;
+    supabase.rpc("resumo_familia_do_membro").then(({ data, error }) => {
+      if (cancelado) return;
+      if (error) { console.error("Não consegui buscar o resumo geral da família:", error.message); return; }
+      setResumoRestrito(data || null);
+    });
+    return () => { cancelado = true; };
+  }, [podeEditar, membro?.familia_id]);
+
+  const saldoGeralPermitido = podeEditar || !!resumoRestrito?.permitido;
+  const saldo = podeEditar ? saldoTotalCasal : Number(resumoRestrito?.saldo || 0);
   const primeiroNome = (membro?.nome || "").split(" ")[0];
 
   const assinaturasAtivas = (assinaturas || []).filter((a) => a.ativo);
@@ -141,11 +167,17 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
         <div style={{ position: "absolute", width: 160, height: 160, borderRadius: "50%", background: C.gold, opacity: 0.16, filter: "blur(38px)", top: -50, right: -30 }} />
         <div style={{ position: "relative" }}>
           <div style={{ fontSize: 11.5, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "rgba(255,255,255,0.65)" }}>Saldo total do casal</div>
-          <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", marginTop: 4 }}>{moeda(saldo)}</div>
-          <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
-            <LegendaSaldo cor="#4CE0AB" texto={`Receitas ${moeda(totalReceitas)}`} />
-            <LegendaSaldo cor="#FF9A9E" texto={`Gastos ${moeda(totalGastos)}`} />
-          </div>
+          {saldoGeralPermitido ? (
+            <>
+              <div style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.5px", marginTop: 4 }}>{moeda(saldo)}</div>
+              <div style={{ display: "flex", gap: 16, marginTop: 10 }}>
+                <LegendaSaldo cor="#4CE0AB" texto={`Receitas ${moeda(totalReceitas)}`} />
+                <LegendaSaldo cor="#FF9A9E" texto={`Gastos ${moeda(totalGastos)}`} />
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.75)", marginTop: 6 }}>Você ainda não tem permissão pra ver o saldo geral — peça pro administrador liberar em "Mais → Membros e permissões".</div>
+          )}
         </div>
       </div>
 
@@ -183,10 +215,18 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Seus widgets</div>
-          <button onClick={() => setPersonalizando((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: C.inkFaint, cursor: "pointer", padding: 2 }}>
-            <IconSettings size={14} color={C.inkFaint} strokeWidth={1.9} />
-            <span style={{ fontSize: 10.5, fontWeight: 700 }}>{personalizando ? "fechar" : "personalizar"}</span>
-          </button>
+          {/* "Personalizar" grava em membros.preferencias_painel, e a política
+              de RLS de UPDATE em "membros" só deixa o DONO editar qualquer
+              linha (inclusive a própria) — pra quem tem acesso restrito,
+              clicar em "Salvar" aqui sempre daria um erro de "0 linhas
+              afetadas". Até existir uma política própria pra isso, o botão
+              fica escondido pra ela em vez de levar a um beco sem saída. */}
+          {podeEditar && (
+            <button onClick={() => setPersonalizando((v) => !v)} style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: "transparent", color: C.inkFaint, cursor: "pointer", padding: 2 }}>
+              <IconSettings size={14} color={C.inkFaint} strokeWidth={1.9} />
+              <span style={{ fontSize: 10.5, fontWeight: 700 }}>{personalizando ? "fechar" : "personalizar"}</span>
+            </button>
+          )}
         </div>
 
         {personalizando ? (

@@ -66,6 +66,11 @@ export default function Gastos({ membro, membros, lancamentos, contas, cartoes, 
         {doMes.map((l) => {
           const f = frenteDe(l.categoria);
           const IconeLinha = ICONE_FRENTE_GASTO[l.categoria];
+          // Quem tem acesso restrito só exclui os PRÓPRIOS lançamentos — a
+          // mesma regra que a RLS já aplica no DELETE ("membro exclui so o
+          // proprio"); escondemos o botão nos lançamentos de outra pessoa
+          // pra não dar a impressão de que ia funcionar e não funcionar.
+          const podeExcluir = membro.papel === "dono" || l.membro_id === membro.id;
           return (
             <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
               <div style={{ width: 36, height: 36, borderRadius: 11, background: f.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -77,7 +82,7 @@ export default function Gastos({ membro, membros, lancamentos, contas, cartoes, 
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ fontSize: 14, fontWeight: 800, color: C.coralText }}>-{moeda(l.valor)}</span>
-                <button onClick={() => excluir(l.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 12, cursor: "pointer" }}>excluir</button>
+                {podeExcluir && <button onClick={() => excluir(l.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 12, cursor: "pointer" }}>excluir</button>}
               </div>
             </div>
           );

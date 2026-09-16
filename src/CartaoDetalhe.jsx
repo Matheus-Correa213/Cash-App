@@ -9,7 +9,7 @@ import LogoInstituicao from "./LogoInstituicao.jsx";
 // foram lançadas com a data certa (nenhuma mágica: a matemática já foi feita
 // na hora da compra, em criar_compra_parcelada).
 
-export default function CartaoDetalhe({ cartaoId, familiaId, onVoltar, onSalvo }) {
+export default function CartaoDetalhe({ cartaoId, familiaId, podeEditar = true, onVoltar, onSalvo }) {
   const [cartao, setCartao] = useState(null);
   const [lancamentosAbertos, setLancamentosAbertos] = useState([]);
   const [carregando, setCarregando] = useState(true);
@@ -145,7 +145,10 @@ export default function CartaoDetalhe({ cartaoId, familiaId, onVoltar, onSalvo }
         </div>
       )}
 
-      {totalFaturaAtual > 0 && (
+      {/* pagar_fatura_cartao() já recusa quem não é dono direto no banco
+          ("Só o administrador pode pagar faturas.") — o botão só fica
+          escondido aqui pra não levar a esse erro cru. */}
+      {podeEditar && totalFaturaAtual > 0 && (
         <button onClick={pagarFaturaAtual} style={{ background: inst.cor, borderRadius: 16, padding: "16px 0", border: "none", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
           Pagar fatura atual
         </button>

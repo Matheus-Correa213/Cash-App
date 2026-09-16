@@ -156,6 +156,15 @@ create policy "lancamentos: dono exclui tudo, membro exclui so o proprio" on lan
 -- conseguem olhar todos os lançamentos da família, mas só devolvem números
 -- agregados (somas), e só se a permissão do membro que está chamando permitir.
 -- ------------------------------------------------------------
+-- resumo_familia_do_membro() — CORRIGIDO na migração 9 (unificação do acesso
+-- da Alessia, 16/09/2026): o "saldo" devolvido aqui usava receitas-gastos do
+-- MÊS (fluxo de caixa), a mesma fórmula já corrigida no Painel do dono numa
+-- versão anterior — por isso o "saldo geral" que um membro restrito via
+-- nunca batia com o do dono. Agora usa o saldo REAL de todas as contas da
+-- família (mesma lógica de saldos_contas(), somada por cima de TODAS as
+-- contas, não só as visíveis pra ela — só chega até aqui quem já tem
+-- permissão "ver_saldo_geral", então ver o número agregado é esperado, sem
+-- expor o detalhe de cada conta escondida). Ver migração 9 para mais.
 create or replace function resumo_familia_do_membro()
 returns jsonb
 language plpgsql security definer stable
@@ -167,6 +176,7 @@ declare
   inicio date := date_trunc('month', current_date)::date;
   total_gastos numeric := 0;
   total_receitas numeric := 0;
+  saldo_real numeric := 0;
 begin
   if fam_id is null then
     return jsonb_build_object('permitido', false, 'erro', 'sem familia');
@@ -174,15 +184,27 @@ begin
   if papel_atual <> 'dono' and not pode_ver then
     return jsonb_build_object('permitido', false);
   end if;
+
   select coalesce(sum(valor) filter (where tipo = 'gasto'), 0), coalesce(sum(valor) filter (where tipo = 'receita'), 0)
     into total_gastos, total_receitas
     from lancamentos
     where familia_id = fam_id and data >= inicio;
+
+  select coalesce(sum(
+    c.saldo_inicial + coalesce((
+      select sum(case when l.tipo = 'receita' then l.valor when l.tipo = 'gasto' then -l.valor else 0 end)
+      from lancamentos l where l.conta_id = c.id
+    ), 0)
+  ), 0)
+  into saldo_real
+  from contas c
+  where c.familia_id = fam_id and c.tipo <> 'poupanca';
+
   return jsonb_build_object(
     'permitido', true,
     'total_gastos', total_gastos,
     'total_receitas', total_receitas,
-    'saldo', total_receitas - total_gastos
+    'saldo', saldo_real
   );
 end;
 $$;
@@ -394,6 +416,15 @@ create policy "investimentos: so o dono ve e mexe" on investimentos
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
 
+-- saldos_contas() — ampliado na migração 9 (unificação do acesso da
+-- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido
+-- enquanto só ele via "Contas e cartões"/"Relatórios". Agora que essas
+-- telas também aparecem no "Mais" de quem tem acesso restrito (mesmos
+-- menus, como pedido), esta função devolve, pra quem não é dono, o saldo
+-- real só das contas JÁ marcadas como visíveis pra ela
+-- (visivel_para_restrito = true) — nenhuma conta nova fica exposta, é a
+-- mesma regra que a tabela "contas" já aplica no SELECT direto (ver a
+-- política "contas: membro ve as marcadas como visiveis").
 create or replace function saldos_contas()
 returns table(conta_id uuid, saldo numeric)
 language sql security definer stable
@@ -405,7 +436,8 @@ as $$
   ), 0) as saldo
   from contas c
   left join lancamentos l on l.conta_id = c.id
-  where c.familia_id = minha_familia_id() and meu_papel() = 'dono'
+  where c.familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or c.visivel_para_restrito = true)
   group by c.id, c.saldo_inicial;
 $$;
 

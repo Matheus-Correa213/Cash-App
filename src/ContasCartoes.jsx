@@ -18,7 +18,14 @@ const TIPOS_CONTA = [
   ["outro", "Outro"],
 ];
 
-export default function ContasCartoes({ familiaId, onAbrirCartao }) {
+// podeEditar (16/09/2026, unificação do acesso da Alessia): esta tela agora
+// também aparece pra quem tem acesso restrito (mesmos menus, como pedido) —
+// ela só pode VER as contas/cartões já marcados como visíveis pra ela
+// (isso quem filtra é o RLS, antes mesmo do dado chegar aqui); cadastrar,
+// excluir ou marcar visibilidade continuam só do dono (RLS "contas/cartoes:
+// dono ve e mexe em tudo" barra qualquer tentativa dela no banco — aqui a
+// gente só esconde os botões que iam dar nisso).
+export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCartao }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [saldos, setSaldos] = useState({});
@@ -96,7 +103,7 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
             <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{c.titular || "—"} {c.visivel_para_restrito ? "· visível pra ela" : ""}</div>
           </div>
           <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(saldos[c.id] ?? c.saldo_inicial)}</span>
-          <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>
+          {podeEditar && <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>}
         </div>
       );
     });
@@ -125,13 +132,17 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
         <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCard size={14} color={C.inkFaint} strokeWidth={2} /> Contas bancárias</div>
         {bancarias.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma conta bancária cadastrada ainda.</div>}
         {ListaContas(bancarias)}
-        {!mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta, carteira ou poupança</button>}
-        {mostrarFormConta && <NovaConta familiaId={familiaId} onSalvo={() => { setMostrarFormConta(false); carregar(); }} onCancelar={() => setMostrarFormConta(false)} />}
+        {podeEditar && !mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta, carteira ou poupança</button>}
+        {podeEditar && mostrarFormConta && <NovaConta familiaId={familiaId} onSalvo={() => { setMostrarFormConta(false); carregar(); }} onCancelar={() => setMostrarFormConta(false)} />}
       </div>
 
       <div style={cardStyle}>
         <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCash size={14} color={C.inkFaint} strokeWidth={2} /> Dinheiro em espécie</div>
-        {fisico.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhuma carteira física cadastrada ainda — use "Adicionar conta" acima e escolha o tipo "Carteira/dinheiro".</div>}
+        {fisico.length === 0 && (
+          <div style={{ color: C.inkFaint, fontSize: 13.5 }}>
+            {podeEditar ? 'Nenhuma carteira física cadastrada ainda — use "Adicionar conta" acima e escolha o tipo "Carteira/dinheiro".' : "Nenhuma carteira física cadastrada ainda."}
+          </div>
+        )}
         {ListaContas(fisico)}
       </div>
 
@@ -206,8 +217,8 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
             </button>
           );
         })}
-        {!mostrarFormCartao && <button style={btnGhost} onClick={() => setMostrarFormCartao(true)}>+ Adicionar cartão</button>}
-        {mostrarFormCartao && <NovoCartao familiaId={familiaId} contas={contas} onSalvo={() => { setMostrarFormCartao(false); carregar(); }} onCancelar={() => setMostrarFormCartao(false)} />}
+        {podeEditar && !mostrarFormCartao && <button style={btnGhost} onClick={() => setMostrarFormCartao(true)}>+ Adicionar cartão</button>}
+        {podeEditar && mostrarFormCartao && <NovoCartao familiaId={familiaId} contas={contas} onSalvo={() => { setMostrarFormCartao(false); carregar(); }} onCancelar={() => setMostrarFormCartao(false)} />}
       </div>
     </div>
   );

@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import { C } from "./theme.js";
 import { IconCosmo, IconChevronDown, IconClose } from "./Icons.jsx";
 import OwnerView from "./OwnerView.jsx";
-import MemberView from "./MemberView.jsx";
 
 // Cabeçalho fixo do app inteiro — antes disso ser trocado, tudo que o
 // Matheus enxergava logo de cara era a barra genérica antiga ("Correa Cash /
@@ -55,9 +54,15 @@ export default function App({ membro, onSignOut, onMembroAtualizado }) {
           </div>
         )}
       </header>
-      {membro.papel === "dono"
-        ? <OwnerView membro={membro} onMembroAtualizado={onMembroAtualizado} />
-        : <MemberView membro={membro} />}
+      {/* Correção 16/09/2026 (unificação do acesso da Alessia): antes daqui,
+          quem não era "dono" caía num componente à parte (MemberView) — sem
+          a barra de baixo, sem o visual redesenhado, sem chat com o COSMO. O
+          Matheus pediu explicitamente os mesmos menus e a mesma aparência
+          pra quem tem acesso restrito, só com edições específicas
+          escondidas (ver comentários dentro de OwnerView.jsx) — por isso
+          agora todo mundo passa pelo mesmo componente, e é ele quem decide,
+          tela por tela, o que fica editável. */}
+      <OwnerView membro={membro} onMembroAtualizado={onMembroAtualizado} />
     </div>
   );
 }

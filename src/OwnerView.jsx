@@ -32,7 +32,16 @@ const ABAS_PRINCIPAIS = [
   { chave: "mais", label: "Mais", Icone: IconGrid },
 ];
 
+// Correção 16/09/2026 (unificação do acesso da Alessia): este componente
+// era só do dono — agora é a casca inteira do app (Painel/Receitas/Gastos/
+// Mais), compartilhada por qualquer papel. `podeEditar` (= é dono) é o que
+// decide, tela por tela dentro de "Mais", se aparecem os botões de
+// cadastrar/editar/excluir/pagar fatura — o dado em si continua vindo do
+// banco já filtrado pelo RLS (RLS é quem decide o que cada um VÊ; isto aqui
+// só decide o que cada um consegue MEXER na interface, pra não deixar
+// ninguém clicar num botão que ia dar erro do banco).
 export default function OwnerView({ membro, onMembroAtualizado }) {
+  const podeEditar = membro.papel === "dono";
   const [lancamentos, setLancamentos] = useState([]);
   const [membros, setMembros] = useState([]);
   const [contas, setContas] = useState([]);
@@ -87,6 +96,15 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
 
   const nomePorMembroId = useMemo(() => Object.fromEntries(membros.map((m) => [m.id, m.nome])), [membros]);
 
+  // O seletor "lançar em nome de outro membro" (dentro de NovoLancamento) só
+  // faz sentido pro dono — a política de RLS de INSERT em "lancamentos" só
+  // deixa quem tem acesso restrito lançar em NOME PRÓPRIO (membro_id =
+  // meu_membro_id()); se ela escolhesse outro nome nesse seletor, o
+  // lançamento seria recusado pelo banco com um erro cru. Passar
+  // `undefined` aqui esconde o seletor pra ela, do mesmo jeito que o
+  // MemberView de antes nunca passava essa lista.
+  const membrosParaLancar = podeEditar ? membros : undefined;
+
   function irPara(destino) {
     if (destino === "painel" || destino === "receitas" || destino === "gastos") {
       setAba(destino); setTela(null);
@@ -109,24 +127,24 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         <>
           {aba === "painel" && (
             <Painel
-              membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
+              membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
               onNavegar={irPara} onSalvo={() => carregarTudo({ silencioso: true })}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
             />
           )}
 
           {aba === "receitas" && (
-            <Receitas membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Receitas membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "gastos" && (
-            <Gastos membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Gastos membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "mais" && (
             <TelaMais
               tela={tela} setTela={setTela}
-              membro={membro} membros={membros} contas={contas} cartoes={cartoes}
+              membro={membro} membros={membros} contas={contas} cartoes={cartoes} podeEditar={podeEditar}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
             />
@@ -139,18 +157,18 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, podeEditar, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
-    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
+    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
   }
-  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
-  if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} />;
+  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} podeEditar={podeEditar} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
+  if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} />;
   if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} />;
-  if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} />;
+  if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
   if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "importar") return <ImportarArquivo membro={membro} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
-  if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
+  if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
 
   const itens = [
     { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
@@ -193,16 +211,23 @@ function BarraInferior({ aba, onEscolher }) {
   );
 }
 
-function GerenciarMembros({ membros, membroLogado, contas, cartoes, onAtualizado, onVoltar }) {
+// Correção 16/09/2026 (unificação do acesso da Alessia, resposta à pergunta
+// "o que ela deve ver dentro do Mais?"): ela enxerga esta mesma tela — vê a
+// lista de membros da família — mas sem nenhum botão de editar
+// permissões/mesada/visibilidade nem de adicionar gente nova. `podeEditar`
+// (= é dono) é quem decide isso; a lista em si (`membros`) já é a mesma pra
+// qualquer papel, já que a política de RLS "membros: qualquer um da familia
+// ve os membros da familia" nunca escondeu isso de ninguém.
+function GerenciarMembros({ membros, membroLogado, contas, cartoes, podeEditar, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
 
   return (
     <div style={cardStyle}>
       {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10 }}>‹ Voltar</button>}
       <div style={{ fontSize: 13, fontWeight: 800, color: C.ink, marginBottom: 12 }}>MEMBROS DA FAMÍLIA</div>
-      {membros.map((m) => <MembroCard key={m.id} membro={m} contas={contas} cartoes={cartoes} souEu={m.id === membroLogado.id} onAtualizado={onAtualizado} />)}
-      {!mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro</button>}
-      {mostrarForm && <AdicionarMembro familiaId={membroLogado.familia_id} onSalvo={() => { setMostrarForm(false); onAtualizado(); }} onCancelar={() => setMostrarForm(false)} />}
+      {membros.map((m) => <MembroCard key={m.id} membro={m} contas={contas} cartoes={cartoes} souEu={m.id === membroLogado.id} podeEditar={podeEditar} onAtualizado={onAtualizado} />)}
+      {podeEditar && !mostrarForm && <button style={{ ...btnGhost, marginTop: 8 }} onClick={() => setMostrarForm(true)}>+ Adicionar membro</button>}
+      {podeEditar && mostrarForm && <AdicionarMembro familiaId={membroLogado.familia_id} onSalvo={() => { setMostrarForm(false); onAtualizado(); }} onCancelar={() => setMostrarForm(false)} />}
     </div>
   );
 }
@@ -213,7 +238,7 @@ function GerenciarMembros({ membros, membroLogado, contas, cartoes, onAtualizado
 // dentro do cartão de cada membro (pra ficar junto das permissões dela),
 // hoje ela vale igual pra qualquer membro com acesso restrito que exista
 // na família (só a Alessia, por enquanto).
-function MembroCard({ membro, contas, cartoes, souEu, onAtualizado }) {
+function MembroCard({ membro, contas, cartoes, souEu, podeEditar, onAtualizado }) {
   const [editando, setEditando] = useState(false);
   const [mesada, setMesada] = useState(membro.mesada_mensal || 0);
   const [perm, setPerm] = useState(membro.permissoes || {});
@@ -254,9 +279,9 @@ function MembroCard({ membro, contas, cartoes, souEu, onAtualizado }) {
           <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>{membro.nome} {souEu && "(você)"}</div>
           <div style={{ fontSize: 12, color: C.inkFaint }}>{membro.papel === "dono" ? "Administrador(a)" : "Acesso restrito"} {membro.email ? `· ${membro.email}` : ""} {!membro.user_id ? "· convite pendente" : ""}</div>
         </div>
-        {membro.papel === "restrito" && !editando && <button style={btnGhost} onClick={() => setEditando(true)}>Editar</button>}
+        {podeEditar && membro.papel === "restrito" && !editando && <button style={btnGhost} onClick={() => setEditando(true)}>Editar</button>}
       </div>
-      {membro.papel === "restrito" && editando && (
+      {podeEditar && membro.papel === "restrito" && editando && (
         <div style={{ marginTop: 10 }}>
           <label style={{ fontSize: 12.5, color: C.inkMute }}>Mesada mensal</label>
           <input style={{ ...input, display: "block", marginTop: 4, marginBottom: 10 }} type="number" step="0.01" value={mesada} onChange={(e) => setMesada(e.target.value)} />
