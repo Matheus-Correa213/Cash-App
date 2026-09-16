@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda } from "./theme.js";
 import { IconCard, IconCash } from "./Icons.jsx";
+import LogoInstituicao from "./LogoInstituicao.jsx";
 
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 18, marginBottom: 16 };
 const h2 = { fontSize: 12, fontWeight: 800, color: C.inkFaint, marginBottom: 12, letterSpacing: "0.04em", textTransform: "uppercase" };
@@ -159,11 +160,12 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
               onClick={() => onAbrirCartao && onAbrirCartao(k.id)}
               style={{ position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, borderRadius: 18, padding: 18, display: "flex", flexDirection: "column", gap: 12, border: "none", width: "100%", textAlign: "left", cursor: "pointer", marginBottom: 12 }}
             >
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{k.nome}</div>
                   <div style={{ fontSize: 10.5, fontWeight: 600, color: "rgba(255,255,255,0.6)" }}>{k.titular || ""}</div>
                 </div>
+                <LogoInstituicao nome={k.bandeira || k.nome} size={30} claro />
               </div>
               <div>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Fatura atual</div>

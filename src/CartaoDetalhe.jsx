@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
+import LogoInstituicao from "./LogoInstituicao.jsx";
 
 // Detalhe de um cartão — visão estilo app de banco: anel de limite, fatura
 // atual itemizada com o tipo de cada compra (à vista / parcela / assinatura)
@@ -76,8 +77,9 @@ export default function CartaoDetalhe({ cartaoId, familiaId, onVoltar, onSalvo }
       <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", textAlign: "left" }}>‹ Voltar</button>
 
       <div style={{ background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, borderRadius: 20, padding: 20, height: 130, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
-        <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{cartao.nome}</span>
+          <LogoInstituicao nome={cartao.bandeira || cartao.nome} size={32} claro />
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end" }}>
           <span style={{ fontSize: 15, fontWeight: 700, color: "rgba(255,255,255,0.85)", letterSpacing: 2 }}>{cartao.bandeira || ""}</span>

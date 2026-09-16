@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
 import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight, IconChevronUp, IconChevronDown, IconSettings, IconTrendingUp } from "./Icons.jsx";
+import LogoInstituicao from "./LogoInstituicao.jsx";
 
 // Catálogo de tudo que PODE aparecer em "Seus widgets" — cada pessoa escolhe
 // quais entram e em que ordem (gravado em membros.preferencias_painel).
@@ -203,7 +204,7 @@ function WidgetCartao({ cartao, lancamentos, onNavegar }) {
   return (
     <button onClick={() => onNavegar(`cartao:${cartao.id}`)} style={{ ...widgetBase, position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
       <div style={{ position: "absolute", width: 100, height: 100, borderRadius: "50%", background: "#fff", opacity: 0.08, filter: "blur(24px)", top: -30, right: -20 }} />
-      <div style={{ position: "relative" }}>
+      <div style={{ position: "relative", flex: 1 }}>
         <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.65)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{cartao.nome}</div>
         <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{moeda(aberto)}</div>
         {disponivel != null && (
@@ -212,6 +213,7 @@ function WidgetCartao({ cartao, lancamentos, onNavegar }) {
           </div>
         )}
       </div>
+      <LogoInstituicao nome={cartao.bandeira || cartao.nome} size={26} claro />
       <IconChevronRight size={15} color="rgba(255,255,255,0.7)" strokeWidth={2.3} style={{ position: "relative", flexShrink: 0 }} />
     </button>
   );
