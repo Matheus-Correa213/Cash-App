@@ -73,22 +73,33 @@ alter table investimentos enable row level security;
 -- Políticas: contas — o dono mexe em tudo; o membro restrito só ENXERGA as
 -- contas que o dono marcou como visíveis (precisa ver o nome pra escolher de
 -- onde saiu o gasto dela quando lançar, mas não a lista toda nem o saldo).
+--
+-- Correção 16/09/2026: "create policy" NÃO aceita "if not exists" (diferente
+-- de "create table"/"alter table add column") — rodar este script uma
+-- segunda vez batia em "policy already exists" e abortava o resto do script
+-- no meio. Agora cada política tem um "drop policy if exists" na frente, o
+-- que a torna de fato segura de rodar de novo quantas vezes precisar.
+drop policy if exists "contas: dono ve e mexe em tudo" on contas;
 create policy "contas: dono ve e mexe em tudo" on contas
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
 
+drop policy if exists "contas: membro ve as marcadas como visiveis" on contas;
 create policy "contas: membro ve as marcadas como visiveis" on contas
   for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
 
 -- Políticas: cartões — mesmo princípio das contas.
+drop policy if exists "cartoes: dono ve e mexe em tudo" on cartoes_credito;
 create policy "cartoes: dono ve e mexe em tudo" on cartoes_credito
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
 
+drop policy if exists "cartoes: membro ve os marcados como visiveis" on cartoes_credito;
 create policy "cartoes: membro ve os marcados como visiveis" on cartoes_credito
   for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
 
 -- Políticas: investimentos — só o dono, sem exceção.
+drop policy if exists "investimentos: so o dono ve e mexe" on investimentos;
 create policy "investimentos: so o dono ve e mexe" on investimentos
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');

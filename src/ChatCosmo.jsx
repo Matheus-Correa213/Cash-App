@@ -56,8 +56,8 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       // Manda um resumo das contas/cartões já cadastrados junto — é assim que
       // o COSMO sabe se uma conta que o usuário mencionou já existe (pra
       // ATUALIZAR) ou é nova (pra CRIAR), sem precisar de outra ida ao banco.
-      const contasResumo = contas.map((c) => ({ nome: c.nome, tipo: c.tipo, instituicao: c.instituicao, titular: c.titular }));
-      const cartoesResumo = cartoes.map((k) => ({ nome: k.nome, bandeira: k.bandeira, titular: k.titular }));
+      const contasResumo = contas.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, instituicao: c.instituicao, titular: c.titular }));
+      const cartoesResumo = cartoes.map((k) => ({ id: k.id, nome: k.nome, bandeira: k.bandeira, titular: k.titular }));
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
@@ -103,6 +103,32 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     if (error) throw error;
   }
 
+  // Normaliza um nome pra comparação tolerante (sem acento, sem espaços
+  // duplicados/nas pontas, minúsculo) — o nome que a IA reproduz de memória
+  // raramente vem IDÊNTICO byte a byte ao que está no banco (um espaço a
+  // mais, "Nubank" em vez de "Nubank Croma"), então um match por igualdade
+  // estrita falhava silenciosamente na maior parte das vezes.
+  function normalizar(s) {
+    return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+
+  // Acha o registro certo pra uma proposta de "atualizar_*": primeiro pelo id
+  // exato (o jeito confiável — é o que o COSMO agora manda sempre que
+  // encontra algo parecido), com um fallback por nome tolerante (igual, ou
+  // um contém o outro) pra não quebrar se algum dia vier só o nome.
+  function encontrarAlvo(lista, dados) {
+    if (dados.id_existente) {
+      const porId = lista.find((c) => c.id === dados.id_existente);
+      if (porId) return porId;
+    }
+    const alvo = normalizar(dados.nome_existente || dados.nome);
+    if (!alvo) return null;
+    return (
+      lista.find((c) => normalizar(c.nome) === alvo) ||
+      lista.find((c) => normalizar(c.nome).includes(alvo) || alvo.includes(normalizar(c.nome)))
+    );
+  }
+
   // Só o dono consegue de fato gravar em contas/cartoes_credito (RLS "dono ve
   // e mexe em tudo") — pra Alessia essa proposta chegaria a dar erro aqui, o
   // que é o comportamento certo, já que só o dono mexe em contas/cartões em
@@ -121,8 +147,8 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       });
       if (error) throw error;
     } else if (acao === "atualizar_conta") {
-      const alvo = contas.find((c) => c.nome.toLowerCase() === String(dados.nome_existente || dados.nome || "").toLowerCase());
-      if (!alvo) throw new Error(`Não encontrei uma conta chamada "${dados.nome_existente || dados.nome}".`);
+      const alvo = encontrarAlvo(contas, dados);
+      if (!alvo) throw new Error(`Não encontrei a conta "${dados.nome_existente || dados.nome}" pra atualizar — confira em Contas e cartões se o nome bate.`);
       const patch = {};
       if (dados.nome) patch.nome = dados.nome;
       if (dados.tipo) patch.tipo = dados.tipo;
@@ -144,8 +170,8 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       });
       if (error) throw error;
     } else if (acao === "atualizar_cartao") {
-      const alvo = cartoes.find((c) => c.nome.toLowerCase() === String(dados.nome_existente || dados.nome || "").toLowerCase());
-      if (!alvo) throw new Error(`Não encontrei um cartão chamado "${dados.nome_existente || dados.nome}".`);
+      const alvo = encontrarAlvo(cartoes, dados);
+      if (!alvo) throw new Error(`Não encontrei o cartão "${dados.nome_existente || dados.nome}" pra atualizar — confira em Contas e cartões se o nome bate.`);
       const patch = {};
       if (dados.nome) patch.nome = dados.nome;
       if (dados.bandeira !== undefined) patch.bandeira = dados.bandeira || null;
@@ -160,19 +186,49 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     }
   }
 
+  function marcarConfirmada(indiceMensagem, indiceProposta) {
+    setMensagens((m) => m.map((msg, i) => {
+      if (i !== indiceMensagem) return msg;
+      const confirmadas = msg.confirmadas.slice();
+      confirmadas[indiceProposta] = true;
+      return { ...msg, confirmadas };
+    }));
+  }
+
+  async function confirmarUma(proposta) {
+    if (proposta.natureza === "lancamento") await confirmarLancamento(proposta.dados);
+    else await confirmarContaOuCartao(proposta.dados);
+  }
+
   async function confirmarItem(indiceMensagem, indiceProposta, proposta) {
     try {
-      if (proposta.natureza === "lancamento") await confirmarLancamento(proposta.dados);
-      else await confirmarContaOuCartao(proposta.dados);
-      setMensagens((m) => m.map((msg, i) => {
-        if (i !== indiceMensagem) return msg;
-        const confirmadas = msg.confirmadas.slice();
-        confirmadas[indiceProposta] = true;
-        return { ...msg, confirmadas };
-      }));
+      await confirmarUma(proposta);
+      marcarConfirmada(indiceMensagem, indiceProposta);
       onSalvo && onSalvo();
     } catch (e) {
       alert(e.message);
+    }
+  }
+
+  // Quando o COSMO devolve várias propostas de uma vez (ex: colou o saldo de
+  // 9 contas numa mensagem só), clicar "Confirmar" uma por uma é cansativo e
+  // fácil de esquecer alguma no meio — daí essa ação em lote, que tenta todas
+  // e no final avisa exatamente quais falharam (em vez de um alert por vez
+  // interrompendo o processo das que ainda iam ser confirmadas).
+  async function confirmarTodas(indiceMensagem, propostas, confirmadas) {
+    const falhas = [];
+    for (let i = 0; i < propostas.length; i++) {
+      if (confirmadas[i]) continue;
+      try {
+        await confirmarUma(propostas[i]);
+        marcarConfirmada(indiceMensagem, i);
+      } catch (e) {
+        falhas.push(`${propostas[i].dados?.nome || propostas[i].dados?.descricao || `item ${i + 1}`}: ${e.message}`);
+      }
+    }
+    onSalvo && onSalvo();
+    if (falhas.length > 0) {
+      alert(`Algumas propostas não foram salvas:\n\n${falhas.join("\n")}`);
     }
   }
 
@@ -199,7 +255,12 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
 
       <div style={{ flex: 1, overflowY: "auto", padding: "8px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
         {mensagens.map((m, i) => (
-          <Bolha key={i} mensagem={m} onConfirmar={(indiceProposta, proposta) => confirmarItem(i, indiceProposta, proposta)} />
+          <Bolha
+            key={i}
+            mensagem={m}
+            onConfirmar={(indiceProposta, proposta) => confirmarItem(i, indiceProposta, proposta)}
+            onConfirmarTodas={() => confirmarTodas(i, m.propostas, m.confirmadas)}
+          />
         ))}
         {enviando && <div style={{ fontSize: 12, color: C.inkFaint }}>o COSMO está pensando…</div>}
         {erro && <div style={{ fontSize: 12, color: C.danger }}>{erro}</div>}
@@ -228,9 +289,10 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   );
 }
 
-function Bolha({ mensagem, onConfirmar }) {
+function Bolha({ mensagem, onConfirmar, onConfirmarTodas }) {
   const deUsuario = mensagem.autor === "usuario";
   const propostas = mensagem.propostas || [];
+  const pendentes = propostas.filter((_, idx) => !mensagem.confirmadas?.[idx]).length;
   return (
     <div style={{ display: "flex", justifyContent: deUsuario ? "flex-end" : "flex-start" }}>
       <div style={{ maxWidth: "85%", display: "flex", flexDirection: "column", gap: 8 }}>
@@ -244,6 +306,11 @@ function Bolha({ mensagem, onConfirmar }) {
           }}>
             {mensagem.texto}
           </div>
+        )}
+        {propostas.length > 1 && pendentes > 1 && (
+          <button onClick={onConfirmarTodas} style={{ alignSelf: "flex-start", background: C.ink, borderRadius: 10, border: "none", padding: "8px 14px", color: "#fff", fontSize: 11.5, fontWeight: 800, cursor: "pointer" }}>
+            Confirmar todas as {pendentes} propostas
+          </button>
         )}
         {propostas.map((proposta, idx) => (
           mensagem.confirmadas?.[idx]

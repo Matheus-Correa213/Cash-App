@@ -49,6 +49,11 @@ create index if not exists idx_lancamentos_assinatura on lancamentos (assinatura
 
 alter table assinaturas enable row level security;
 
+-- Correção 16/09/2026: "create policy" não aceita "if not exists" — o
+-- comentário no topo deste arquivo dizia "pode rodar com segurança" mas
+-- isso valia só pras tabelas/colunas, não pra política abaixo. Com o "drop
+-- policy if exists" na frente, agora vale de verdade pro arquivo inteiro.
+drop policy if exists "assinaturas: dono ve e mexe em tudo" on assinaturas;
 create policy "assinaturas: dono ve e mexe em tudo" on assinaturas
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');

@@ -45,8 +45,9 @@ const FERRAMENTAS = [
     input_schema: {
       type: "object",
       properties: {
-        acao: { type: "string", enum: ["criar_conta", "atualizar_conta", "criar_cartao", "atualizar_cartao"], description: "atualizar_* é quando o nome já bate com uma conta/cartão existente que o app te mostrou; criar_* quando não existe ainda." },
-        nome_existente: { type: "string", description: "Só pra 'atualizar_*': o nome EXATO da conta/cartão já existente (de acordo com a lista de contas/cartões que você já viu), pra encontrar no banco." },
+        acao: { type: "string", enum: ["criar_conta", "atualizar_conta", "criar_cartao", "atualizar_cartao"], description: "atualizar_* é quando já existe uma conta/cartão parecido na lista que você viu; criar_* quando não existe ainda." },
+        id_existente: { type: "string", description: "Só pra 'atualizar_*': o campo 'id' EXATO (copie-o exatamente, é um código, não um nome) da conta/cartão já existente, conforme a lista de contas/cartões que você já viu. Isso é o que o app usa pra achar o registro certo — sempre que for atualizar algo que já existe, inclua este campo." },
+        nome_existente: { type: "string", description: "Só pra 'atualizar_*': o nome da conta/cartão já existente, como referência (o app usa id_existente pra achar o registro; isto é só pra exibição)." },
         nome: { type: "string", description: "Nome da conta/cartão (novo, ou o nome atualizado)." },
         tipo: { type: "string", enum: ["corrente", "poupanca", "carteira", "outro"], description: "Só pra contas. 'carteira' é dinheiro físico." },
         instituicao: { type: "string", description: "Só pra contas (ex: Nubank, Inter, Banco do Brasil, Mercado Pago, Revolut). Deixe vazio se for carteira física." },
@@ -76,10 +77,10 @@ const FERRAMENTAS = [
 
 function montarSystemPrompt(contasResumo, cartoesResumo) {
   const listaContas = (contasResumo || []).length
-    ? (contasResumo || []).map((c) => `- ${c.nome} (${c.tipo}${c.instituicao ? `, ${c.instituicao}` : ""}${c.titular ? `, de ${c.titular}` : ""})`).join("\n")
+    ? (contasResumo || []).map((c) => `- [id: ${c.id}] ${c.nome} (${c.tipo}${c.instituicao ? `, ${c.instituicao}` : ""}${c.titular ? `, de ${c.titular}` : ""})`).join("\n")
     : "(nenhuma conta cadastrada ainda)";
   const listaCartoes = (cartoesResumo || []).length
-    ? (cartoesResumo || []).map((k) => `- ${k.nome} (${k.bandeira || "?"}${k.titular ? `, de ${k.titular}` : ""})`).join("\n")
+    ? (cartoesResumo || []).map((k) => `- [id: ${k.id}] ${k.nome} (${k.bandeira || "?"}${k.titular ? `, de ${k.titular}` : ""})`).join("\n")
     : "(nenhum cartão cadastrado ainda)";
 
   return `Você é o COSMO, na sua versão focada em finanças, dentro do app Correa Cash — o app financeiro de um casal (Matheus e Alessia). Seu papel: ajudar a lançar gastos/receitas, ajudar a configurar contas/carteiras/cartões, e responder perguntas sobre as finanças do casal usando dados reais (nunca invente números — use a ferramenta resumo_periodo). Você NUNCA grava nada sozinho — toda ação (lançamento, conta, cartão) é sempre uma PROPOSTA que a pessoa confirma na tela, sem exceção.
@@ -92,8 +93,8 @@ ${listaCartoes}
 
 Regras importantes:
 - Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Nunca diga que "já lançou" — apenas proponha.
-- Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só.
-- Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome) — se já existe algo parecido, use 'atualizar_*' com nome_existente igual ao nome já cadastrado.
+- Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só. NUNCA pule nenhum item da lista que o usuário mandou, mesmo que sejam 5, 10 ou mais — cada conta/cartão mencionado vira uma chamada de ferramenta própria.
+- Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome, mesmo que o usuário não escreva exatamente igual — "Nubank" no texto do usuário deve casar com "Nubank Croma" da lista, por exemplo) — se já existe algo parecido, use 'atualizar_*' e SEMPRE inclua id_existente copiado EXATAMENTE do campo [id: ...] correspondente da lista acima (é assim que o app encontra o registro certo — não é feito por nome). Só use 'criar_*' quando realmente não existir nada parecido na lista.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
 - Seja direto, caloroso e breve — poucas frases, sem enrolação.
 - Nunca dê conselho financeiro genérico não pedido; foque em ajudar com o que foi perguntado.`;
@@ -157,7 +158,12 @@ export default async function handler(req, res) {
       const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify({ model: MODELO, max_tokens: 1536, system: systemPrompt, tools: FERRAMENTAS, messages: mensagens }),
+        // max_tokens generoso de propósito: quando o usuário manda uma lista
+        // grande de contas/cartões de uma vez, o modelo precisa de espaço pra
+        // devolver MUITAS chamadas de ferramenta em paralelo (uma por item) na
+        // mesma resposta. Com um limite baixo, a resposta cortava no meio e
+        // sobravam só 1 ou 2 propostas (ou uma incompleta) em vez de todas.
+        body: JSON.stringify({ model: MODELO, max_tokens: 8192, system: systemPrompt, tools: FERRAMENTAS, messages: mensagens }),
       });
       if (!resp.ok) {
         const detalhe = await resp.text();

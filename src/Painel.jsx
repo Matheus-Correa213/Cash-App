@@ -171,14 +171,22 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
                 return <WidgetCartao key={i} cartao={cartao} lancamentos={lancamentos} onNavegar={onNavegar} />;
               }
               if (w.tipo === "assinaturas") {
-                if (assinaturasAtivas.length === 0) return null;
+                // Antes, sem nenhuma assinatura ativa cadastrada, o widget
+                // simplesmente sumia — a pessoa ligava em "Personalizar", salvava,
+                // voltava e não via nada, parecia que a opção não tinha "pegado".
+                // Agora mostra um estado vazio explicando o que falta.
+                if (assinaturasAtivas.length === 0) return <WidgetVazio key={i} label="Assinaturas" texto="Nenhuma assinatura cadastrada ainda." onNavegar={() => onNavegar("assinaturas")} />;
                 return <WidgetAssinaturas key={i} ativas={assinaturasAtivas} total={totalAssinaturas} proxima={proximaAssinatura} onNavegar={onNavegar} />;
               }
               if (w.tipo === "investimentos") {
-                if (!investimentos || investimentos.length === 0) return null;
+                if (!investimentos || investimentos.length === 0) return <WidgetVazio key={i} label="Investimentos" texto="Nenhum investimento cadastrado ainda." onNavegar={() => onNavegar("investimentos")} />;
                 return <WidgetInvestimentos key={i} totalAtual={totalAtualInv} ganho={ganhoInv} onNavegar={onNavegar} />;
               }
               if (w.tipo === "insight") {
+                // Este widget é o único legitimamente "às vezes não tem nada a
+                // dizer" (só aparece quando há uma variação real de gastos pra
+                // comentar) — por isso continua desaparecendo em silêncio, sem
+                // virar um estado vazio permanente.
                 if (!insight) return null;
                 return <WidgetInsight key={i} insight={insight} />;
               }
@@ -249,6 +257,18 @@ function WidgetInvestimentos({ totalAtual, ganho, onNavegar }) {
         </div>
       </div>
       <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(totalAtual)}</span>
+    </button>
+  );
+}
+
+function WidgetVazio({ label, texto, onNavegar }) {
+  return (
+    <button onClick={onNavegar} style={{ ...widgetBase, background: "#fff", border: `1px dashed ${C.lineStrong}`, cursor: "pointer", textAlign: "left" }}>
+      <div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: C.inkMute }}>{label}</div>
+        <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 2 }}>{texto}</div>
+      </div>
+      <IconChevronRight size={15} color={C.inkFaint} strokeWidth={2.2} />
     </button>
   );
 }
