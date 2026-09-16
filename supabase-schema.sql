@@ -436,6 +436,34 @@ $$;
 grant execute on function saldos_contas() to authenticated;
 grant execute on function pagar_fatura_cartao(uuid, text) to authenticated;
 
+-- ============================================================
+-- Chat do COSMO persistente — adicionado 16/09/2026. Ver
+-- supabase-migracao-5-chat-persistente.sql se você já tem um banco rodando.
+-- Cada pessoa só vê a PRÓPRIA conversa (não é um chat da família).
+-- ============================================================
+
+create table if not exists chat_mensagens (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  membro_id uuid not null references membros(id) on delete cascade,
+  autor text not null check (autor in ('usuario', 'cosmo')),
+  texto text,
+  propostas jsonb,
+  confirmadas jsonb,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_chat_mensagens_membro on chat_mensagens (membro_id, created_at);
+
+alter table chat_mensagens enable row level security;
+
+create policy "chat: cada um ve e mexe so na propria conversa" on chat_mensagens
+  for all using (membro_id = meu_membro_id())
+  with check (membro_id = meu_membro_id());
+
+grant select, insert, update, delete on chat_mensagens to authenticated;
+
 -- Fim do script. Depois de rodar, confira em Table Editor se as tabelas
--- (familias, membros, lancamentos, contas, cartoes_credito, investimentos)
--- aparecem, cada uma com o cadeado de RLS ativado (ícone ao lado do nome).
+-- (familias, membros, lancamentos, contas, cartoes_credito, investimentos,
+-- chat_mensagens) aparecem, cada uma com o cadeado de RLS ativado (ícone ao
+-- lado do nome).

@@ -68,8 +68,13 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
   const preferenciasWidgets = membro?.preferencias_painel?.length ? membro.preferencias_painel : PADRAO_WIDGETS;
 
   async function salvarPreferenciasWidgets(novaLista) {
-    const { error } = await supabase.from("membros").update({ preferencias_painel: novaLista }).eq("id", membro.id);
+    // `.select()` + checar `data.length` é de propósito: um "update" que não
+    // bate em nenhuma linha (id errado, RLS bloqueando) não é reportado como
+    // erro pelo Supabase — sem essa checagem, dava pra "salvar" e a tela
+    // continuar exatamente igual, sem nenhum aviso do motivo.
+    const { data, error } = await supabase.from("membros").update({ preferencias_painel: novaLista }).eq("id", membro.id).select();
     if (error) { alert(error.message); return; }
+    if (!data || data.length === 0) { alert("Não consegui salvar — o banco não confirmou nenhuma alteração."); return; }
     onMembroAtualizado && onMembroAtualizado();
   }
 

@@ -224,14 +224,20 @@ function MembroCard({ membro, contas, cartoes, souEu, onAtualizado }) {
   async function salvar() {
     setSalvando(true);
     try {
+      // `.select()` em cada update, de propósito: o Supabase não avisa
+      // quando um "update" não bate em nenhuma linha (não é erro de RLS pra
+      // ele, é só "zero linhas no WHERE") — sem conferir `data.length`, dava
+      // pra "Salvar" parecer ter funcionado e nada mudar de fato no banco.
       const tarefas = [
-        supabase.from("membros").update({ mesada_mensal: Number(mesada), permissoes: perm }).eq("id", membro.id),
-        ...contas.map((c) => supabase.from("contas").update({ visivel_para_restrito: !!visContas[c.id] }).eq("id", c.id)),
-        ...cartoes.map((c) => supabase.from("cartoes_credito").update({ visivel_para_restrito: !!visCartoes[c.id] }).eq("id", c.id)),
+        { rotulo: "permissões", promessa: supabase.from("membros").update({ mesada_mensal: Number(mesada), permissoes: perm }).eq("id", membro.id).select() },
+        ...contas.map((c) => ({ rotulo: `conta "${c.nome}"`, promessa: supabase.from("contas").update({ visivel_para_restrito: !!visContas[c.id] }).eq("id", c.id).select() })),
+        ...cartoes.map((c) => ({ rotulo: `cartão "${c.nome}"`, promessa: supabase.from("cartoes_credito").update({ visivel_para_restrito: !!visCartoes[c.id] }).eq("id", c.id).select() })),
       ];
-      const resultados = await Promise.all(tarefas);
+      const resultados = await Promise.all(tarefas.map((t) => t.promessa));
       const comErro = resultados.find((r) => r.error);
       if (comErro) throw comErro.error;
+      const semLinha = resultados.findIndex((r) => !r.data || r.data.length === 0);
+      if (semLinha !== -1) throw new Error(`Não consegui salvar ${tarefas[semLinha].rotulo} — o banco não confirmou nenhuma alteração.`);
       setEditando(false);
       onAtualizado();
     } catch (e) {

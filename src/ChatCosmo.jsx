@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, FRENTES_GASTO, FONTES_RECEITA, frenteDe, instituicaoDe, moeda } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
@@ -7,18 +7,60 @@ import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Ico
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
 // lançar" aqui embaixo, que insere direto no Supabase como qualquer outro
 // lançamento do app (sem passar pela IA de novo).
+//
+// Correção 16/09/2026: a conversa inteira (e o estado de cada proposta —
+// pendente ou confirmada) agora é salva na tabela chat_mensagens (ver
+// supabase-migracao-5-chat-persistente.sql) conforme acontece — antes ela
+// só existia na memória deste componente, e sumia por completo ao sair da
+// tela do chat e voltar (o COSMO "esquecia" tudo). Cada mensagem carrega um
+// `dbId` (o id da linha no banco) que a gente usa depois pra atualizar
+// `confirmadas` quando a pessoa confirma uma proposta.
 
 const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?"];
+const SAUDACAO = "Oi! Posso lançar gastos e receitas, ler comprovantes, ajudar a cadastrar/atualizar contas e cartões, e te dar um resumo rápido. É só me mandar uma mensagem ou uma foto.";
 
 export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }) {
-  const [mensagens, setMensagens] = useState([
-    { autor: "cosmo", texto: "Oi! Posso lançar gastos e receitas, ler comprovantes, ajudar a cadastrar/atualizar contas e cartões, e te dar um resumo rápido. É só me mandar uma mensagem ou uma foto." },
-  ]);
+  const [mensagens, setMensagens] = useState([]);
+  const [carregandoHistorico, setCarregandoHistorico] = useState(true);
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
   const [erro, setErro] = useState("");
   const inputArquivo = useRef(null);
   const areaTexto = useRef(null);
+
+  useEffect(() => {
+    let cancelado = false;
+    async function carregarHistorico() {
+      setCarregandoHistorico(true);
+      try {
+        const { data, error } = await supabase
+          .from("chat_mensagens")
+          .select("*")
+          .eq("membro_id", membro.id)
+          .order("created_at", { ascending: true })
+          .limit(200);
+        if (error) throw error;
+        if (!cancelado && data && data.length > 0) {
+          setMensagens(data.map((m) => ({
+            dbId: m.id,
+            autor: m.autor,
+            texto: m.texto,
+            propostas: m.propostas || [],
+            confirmadas: m.confirmadas || (m.propostas || []).map(() => false),
+          })));
+        }
+      } catch (e) {
+        // Uma tabela ainda não existente (antes da migração 5 ser rodada) ou
+        // um problema de rede não deve travar o chat — só significa que a
+        // conversa não vai ficar salva desta vez.
+        console.error("Não consegui carregar o histórico do chat:", e.message);
+      } finally {
+        if (!cancelado) setCarregandoHistorico(false);
+      }
+    }
+    carregarHistorico();
+    return () => { cancelado = true; };
+  }, [membro.id]);
 
   // Textarea que cresce pra baixo conforme a pessoa escreve (até um teto,
   // pra não tomar a tela toda), com Enter enviando e Shift+Enter quebrando
@@ -51,6 +93,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     const minhaMensagem = { autor: "usuario", texto: mensagemTexto, imagemPreview: imagem?.preview };
     setMensagens((m) => [...m, minhaMensagem]);
     setTexto("");
+
+    // Salva sua mensagem no banco em paralelo, sem bloquear o envio pro
+    // COSMO — se isso falhar (rede, migração 5 ainda não rodada), a
+    // conversa desta sessão continua funcionando normalmente, só não fica
+    // salva pra próxima vez que você abrir o chat.
+    supabase.from("chat_mensagens").insert({
+      familia_id: membro.familia_id, membro_id: membro.id, autor: "usuario",
+      texto: mensagemTexto || (imagem ? "📎 Comprovante enviado" : null),
+    }).then(({ error }) => { if (error) console.error("Não consegui salvar sua mensagem no histórico:", error.message); });
+
     try {
       const { data: { session } } = await supabase.auth.getSession();
       // Manda um resumo das contas/cartões já cadastrados junto — é assim que
@@ -66,12 +118,34 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao falar com o COSMO.");
       const propostas = dados.propostas || [];
-      setMensagens((m) => [...m, { autor: "cosmo", texto: dados.texto, propostas, confirmadas: propostas.map(() => false) }]);
+      const confirmadas = propostas.map(() => false);
+
+      // Salva a resposta do COSMO (com as propostas ainda pendentes) e
+      // guarda o id da linha — é ele que a gente usa depois pra atualizar
+      // `confirmadas` quando alguma proposta for confirmada.
+      const { data: inserida, error: erroInsercao } = await supabase
+        .from("chat_mensagens")
+        .insert({ familia_id: membro.familia_id, membro_id: membro.id, autor: "cosmo", texto: dados.texto, propostas, confirmadas })
+        .select()
+        .single();
+      if (erroInsercao) console.error("Não consegui salvar a resposta do COSMO no histórico:", erroInsercao.message);
+
+      setMensagens((m) => [...m, { dbId: inserida?.id, autor: "cosmo", texto: dados.texto, propostas, confirmadas }]);
     } catch (e) {
       setErro(e.message || "Erro ao enviar.");
     } finally {
       setEnviando(false);
     }
+  }
+
+  // Atualiza o array `confirmadas` da mensagem salva no banco — se a
+  // mensagem não tiver chegado a ser salva (erroInsercao acima), `dbId` vem
+  // undefined e a gente não tenta nada (a confirmação continua valendo só
+  // pra tela atual, sem quebrar nada).
+  async function persistirConfirmadas(dbId, confirmadas) {
+    if (!dbId) return;
+    const { error } = await supabase.from("chat_mensagens").update({ confirmadas }).eq("id", dbId);
+    if (error) console.error("Não consegui salvar a confirmação no histórico:", error.message);
   }
 
   function onEscolherArquivo(e) {
@@ -155,8 +229,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       if (dados.instituicao !== undefined) patch.instituicao = dados.instituicao || null;
       if (dados.titular !== undefined) patch.titular = dados.titular || null;
       if (dados.saldo_inicial !== undefined && dados.saldo_inicial !== null) patch.saldo_inicial = Number(dados.saldo_inicial);
-      const { error } = await supabase.from("contas").update(patch).eq("id", alvo.id);
+      // IMPORTANTE: o Supabase/Postgrest NÃO avisa quando um "update" não
+      // encontra nenhuma linha pra atualizar (isso não é um erro de RLS —
+      // pra ele é só "zero linhas bateram no WHERE", e o `error` continua
+      // null). Sem o `.select()` aqui, um id errado ou uma permissão que
+      // barra silenciosamente a linha resultava num "salvo" mentiroso na
+      // tela, com o banco intocado por baixo. Conferir `data.length` depois
+      // do update é o que torna essa falha impossível de passar despercebida.
+      const { data, error } = await supabase.from("contas").update(patch).eq("id", alvo.id).select();
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`A conta "${alvo.nome}" não foi atualizada — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
     } else if (acao === "criar_cartao") {
       const { error } = await supabase.from("cartoes_credito").insert({
         familia_id: membro.familia_id,
@@ -179,20 +261,12 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       if (dados.limite !== undefined && dados.limite !== null) patch.limite = Number(dados.limite);
       if (dados.dia_fechamento !== undefined && dados.dia_fechamento !== null) patch.dia_fechamento = Number(dados.dia_fechamento);
       if (dados.dia_vencimento !== undefined && dados.dia_vencimento !== null) patch.dia_vencimento = Number(dados.dia_vencimento);
-      const { error } = await supabase.from("cartoes_credito").update(patch).eq("id", alvo.id);
+      const { data, error } = await supabase.from("cartoes_credito").update(patch).eq("id", alvo.id).select();
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`O cartão "${alvo.nome}" não foi atualizado — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
     } else {
       throw new Error("Ação desconhecida na proposta.");
     }
-  }
-
-  function marcarConfirmada(indiceMensagem, indiceProposta) {
-    setMensagens((m) => m.map((msg, i) => {
-      if (i !== indiceMensagem) return msg;
-      const confirmadas = msg.confirmadas.slice();
-      confirmadas[indiceProposta] = true;
-      return { ...msg, confirmadas };
-    }));
   }
 
   async function confirmarUma(proposta) {
@@ -200,10 +274,17 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     else await confirmarContaOuCartao(proposta.dados);
   }
 
-  async function confirmarItem(indiceMensagem, indiceProposta, proposta) {
+  // `dbId` e `confirmadasAtual` vêm de quem chama (o `.map` de `mensagens`
+  // no render, sempre com o dado mais recente) em vez de ler `mensagens` de
+  // dentro da função — assim não corre risco de trabalhar com um estado
+  // desatualizado se a pessoa confirmar duas propostas rapidinho.
+  async function confirmarItem(indiceMensagem, dbId, indiceProposta, proposta, confirmadasAtual) {
     try {
       await confirmarUma(proposta);
-      marcarConfirmada(indiceMensagem, indiceProposta);
+      const novaConfirmadas = confirmadasAtual.slice();
+      novaConfirmadas[indiceProposta] = true;
+      setMensagens((m) => m.map((msg, i) => (i === indiceMensagem ? { ...msg, confirmadas: novaConfirmadas } : msg)));
+      persistirConfirmadas(dbId, novaConfirmadas);
       onSalvo && onSalvo();
     } catch (e) {
       alert(e.message);
@@ -215,17 +296,20 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   // fácil de esquecer alguma no meio — daí essa ação em lote, que tenta todas
   // e no final avisa exatamente quais falharam (em vez de um alert por vez
   // interrompendo o processo das que ainda iam ser confirmadas).
-  async function confirmarTodas(indiceMensagem, propostas, confirmadas) {
+  async function confirmarTodas(indiceMensagem, dbId, propostas, confirmadasAtual) {
+    const novaConfirmadas = confirmadasAtual.slice();
     const falhas = [];
     for (let i = 0; i < propostas.length; i++) {
-      if (confirmadas[i]) continue;
+      if (novaConfirmadas[i]) continue;
       try {
         await confirmarUma(propostas[i]);
-        marcarConfirmada(indiceMensagem, i);
+        novaConfirmadas[i] = true;
+        setMensagens((m) => m.map((msg, idx) => (idx === indiceMensagem ? { ...msg, confirmadas: novaConfirmadas.slice() } : msg)));
       } catch (e) {
         falhas.push(`${propostas[i].dados?.nome || propostas[i].dados?.descricao || `item ${i + 1}`}: ${e.message}`);
       }
     }
+    persistirConfirmadas(dbId, novaConfirmadas);
     onSalvo && onSalvo();
     if (falhas.length > 0) {
       alert(`Algumas propostas não foram salvas:\n\n${falhas.join("\n")}`);
@@ -254,12 +338,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "8px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+        {carregandoHistorico && <div style={{ fontSize: 12, color: C.inkFaint }}>Carregando sua conversa com o COSMO…</div>}
+        {!carregandoHistorico && mensagens.length === 0 && (
+          <Bolha mensagem={{ autor: "cosmo", texto: SAUDACAO }} onConfirmar={() => {}} onConfirmarTodas={() => {}} />
+        )}
         {mensagens.map((m, i) => (
           <Bolha
-            key={i}
+            key={m.dbId || i}
             mensagem={m}
-            onConfirmar={(indiceProposta, proposta) => confirmarItem(i, indiceProposta, proposta)}
-            onConfirmarTodas={() => confirmarTodas(i, m.propostas, m.confirmadas)}
+            onConfirmar={(indiceProposta, proposta) => confirmarItem(i, m.dbId, indiceProposta, proposta, m.confirmadas)}
+            onConfirmarTodas={() => confirmarTodas(i, m.dbId, m.propostas, m.confirmadas)}
           />
         ))}
         {enviando && <div style={{ fontSize: 12, color: C.inkFaint }}>o COSMO está pensando…</div>}
