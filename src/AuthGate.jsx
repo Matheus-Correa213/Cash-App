@@ -137,12 +137,19 @@ function MembroGate({ session }) {
   const [membro, setMembro] = useState(null);
   const [erro, setErro] = useState("");
 
-  async function carregar() {
-    setEstado("carregando");
+  // `silencioso=true` é pra recarregar só os dados do membro (depois que o
+  // dono salva uma permissão, a visibilidade de uma conta, ou as
+  // preferências do Painel) SEM passar pela tela cheia de "Carregando…" —
+  // sem isso, `setEstado("carregando")` desmontava o <App> inteiro (e tudo
+  // dentro dele, incluindo a conversa aberta no chat do COSMO e a aba atual)
+  // toda vez que qualquer tela pedia uma atualização depois de salvar algo.
+  async function carregar({ silencioso } = {}) {
+    if (!silencioso) setEstado("carregando");
     try {
       const { data: meu, error: e1 } = await supabase.from("membros").select("*").eq("user_id", session.user.id).maybeSingle();
       if (e1) throw e1;
-      if (meu) { setMembro(meu); setEstado("app"); return; }
+      if (meu) { setMembro(meu); if (!silencioso) setEstado("app"); return; }
+      if (silencioso) return;
 
       const email = session.user.email;
       const { data: convite, error: e2 } = await supabase
@@ -152,6 +159,7 @@ function MembroGate({ session }) {
 
       setEstado("criar-familia");
     } catch (e) {
+      if (silencioso) return; // atualização em segundo plano falhou — não faz sentido derrubar a tela inteira por isso
       setErro(e.message || "Erro ao carregar sua conta.");
       setEstado("erro");
     }
@@ -213,7 +221,7 @@ function MembroGate({ session }) {
     return <CriarFamilia session={session} onCriada={carregar} onSair={sair} />;
   }
 
-  return <App session={session} membro={membro} onSignOut={sair} onMembroAtualizado={carregar} />;
+  return <App session={session} membro={membro} onSignOut={sair} onMembroAtualizado={() => carregar({ silencioso: true })} />;
 }
 
 function CriarFamilia({ session, onCriada, onSair }) {

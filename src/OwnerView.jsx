@@ -44,8 +44,17 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   const [aba, setAba] = useState("painel");
   const [tela, setTela] = useState(null); // ex: "contas" | "cartao:<id>" | "investimentos" | "relatorios" | "assinaturas" | "chat" | "importar" | "membros"
 
-  async function carregarTudo() {
-    setCarregando(true); setErro("");
+  // `silencioso=true` é pra recarregar depois de uma ação (confirmar um
+  // lançamento no chat, editar permissões, etc) SEM esconder a tela atual
+  // atrás do "Carregando…" — isso era um bug real: toda vez que algo chamava
+  // carregarTudo(), o `carregando=true` fazia esse componente inteiro trocar
+  // pra tela de loading e voltar do zero depois, o que desmontava (e
+  // resetava) qualquer estado local da aba aberta — no ChatCosmo isso
+  // aparecia como "confirmei e a conversa inteira sumiu, voltou do zero".
+  // Só a primeira carga (no useEffect abaixo) passa por essa tela cheia.
+  async function carregarTudo({ silencioso } = {}) {
+    if (!silencioso) setCarregando(true);
+    setErro("");
     try {
       const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
@@ -70,7 +79,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
-      setCarregando(false);
+      if (!silencioso) setCarregando(false);
     }
   }
 
@@ -101,25 +110,25 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
           {aba === "painel" && (
             <Painel
               membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
-              onNavegar={irPara} onSalvo={carregarTudo}
-              onMembroAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }}
+              onNavegar={irPara} onSalvo={() => carregarTudo({ silencioso: true })}
+              onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
             />
           )}
 
           {aba === "receitas" && (
-            <Receitas membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={carregarTudo} />
+            <Receitas membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "gastos" && (
-            <Gastos membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={carregarTudo} />
+            <Gastos membro={membro} membros={membros} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "mais" && (
             <TelaMais
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes}
-              onMembroAtualizado={() => { carregarTudo(); onMembroAtualizado && onMembroAtualizado(); }}
-              onSalvo={carregarTudo}
+              onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
+              onSalvo={() => carregarTudo({ silencioso: true })}
             />
           )}
         </>
