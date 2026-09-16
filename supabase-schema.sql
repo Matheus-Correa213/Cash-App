@@ -322,6 +322,10 @@ create table if not exists cartoes_credito (
   -- (ver migração 6) — a fatura mostrada na tela é isto + soma dos gastos em
   -- aberto lançados depois; zera sozinha quando a fatura é paga pelo app.
   fatura_inicial numeric(12,2) not null default 0,
+  -- Quanto do limite está preso em compras parceladas em andamento que ainda
+  -- não têm lançamento individual no app (ver migração 7) — entra na conta
+  -- de "disponível" mas NÃO na fatura atual, já que só vira fatura mês a mês.
+  limite_comprometido_extra numeric(12,2) not null default 0,
   visivel_para_restrito boolean not null default false,
   created_at timestamptz not null default now()
 );

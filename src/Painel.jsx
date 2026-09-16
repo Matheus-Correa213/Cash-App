@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, instituicaoDe, moeda, inicioMesISO } from "./theme.js";
+import { C, instituicaoDe, moeda, inicioMesISO, mesDaFatura } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
 import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight, IconChevronUp, IconChevronDown, IconSettings, IconTrendingUp } from "./Icons.jsx";
 import LogoInstituicao from "./LogoInstituicao.jsx";
@@ -237,24 +237,43 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
 }
 
 function WidgetCartao({ cartao, lancamentos, onNavegar }) {
-  // fatura_inicial (migração 6) é a dívida que já existia no cartão antes de
-  // começar a lançar tudo pelo app — sem somar ela aqui, o widget mostrava
-  // uma fatura menor (ou zerada) do que a real, mesmo com o limite certo.
-  const aberto = useMemo(
-    () => lancamentos.filter((l) => l.cartao_id === cartao.id && !l.fatura_paga && l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0) + Number(cartao.fatura_inicial || 0),
+  const abertosDoCartao = useMemo(
+    () => lancamentos.filter((l) => l.cartao_id === cartao.id && !l.fatura_paga && l.tipo === "gasto"),
     [lancamentos, cartao]
   );
+  // fatura_inicial (migração 6) é a dívida que já existia no cartão antes de
+  // começar a lançar tudo pelo app. faturaAtual é só o ciclo de agora (mesmo
+  // recorte que a tela do cartão usa); usado soma TUDO em aberto (presente e
+  // futuro) + limite_comprometido_extra (migração 7, parcelas em andamento
+  // que o app ainda não conhece uma por uma) — é isso que dá o disponível
+  // real, que costuma ser menor do que "limite − fatura atual" quando há
+  // parcelamento em curso.
+  const { faturaAtual, usado } = useMemo(() => {
+    const hojeMes = new Date().toISOString().slice(0, 7);
+    const buckets = abertosDoCartao.map((l) => mesDaFatura(l.data, cartao.dia_fechamento));
+    const mesAtual = buckets.filter((m) => m >= hojeMes).sort()[0] || hojeMes;
+    const faturaInicial = Number(cartao.fatura_inicial || 0);
+    const doCicloAtual = abertosDoCartao.filter((_, i) => buckets[i] === mesAtual).reduce((s, l) => s + Number(l.valor), 0);
+    const total = abertosDoCartao.reduce((s, l) => s + Number(l.valor), 0);
+    return {
+      faturaAtual: doCicloAtual + faturaInicial,
+      usado: total + faturaInicial + Number(cartao.limite_comprometido_extra || 0),
+    };
+  }, [abertosDoCartao, cartao]);
   const inst = instituicaoDe(cartao.bandeira || cartao.nome);
-  const disponivel = cartao.limite != null ? Math.max(0, cartao.limite - aberto) : null;
+  const disponivel = cartao.limite != null ? Math.max(0, cartao.limite - usado) : null;
   return (
     <button onClick={() => onNavegar(`cartao:${cartao.id}`)} style={{ ...widgetBase, position: "relative", overflow: "hidden", background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, color: "#fff", border: "none", textAlign: "left", cursor: "pointer" }}>
       <div style={{ position: "absolute", width: 100, height: 100, borderRadius: "50%", background: "#fff", opacity: 0.08, filter: "blur(24px)", top: -30, right: -20 }} />
       <div style={{ position: "relative", flex: 1 }}>
         <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.65)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{cartao.nome}</div>
-        <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{moeda(aberto)}</div>
+        {/* Disponível é o número em destaque (o que importa no dia a dia é
+            quanto ainda dá pra gastar) — a fatura do mês vira a linha
+            pequena abaixo. */}
+        <div style={{ fontSize: 18, fontWeight: 800, marginTop: 2 }}>{disponivel != null ? moeda(disponivel) : moeda(faturaAtual)}</div>
         {disponivel != null && (
           <div style={{ fontSize: 10.5, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginTop: 2 }}>
-            Disponível {moeda(disponivel)}{cartao.dia_fechamento ? ` · fecha dia ${cartao.dia_fechamento}` : ""}
+            Fatura atual {moeda(faturaAtual)}{cartao.dia_fechamento ? ` · fecha dia ${cartao.dia_fechamento}` : ""}
           </div>
         )}
       </div>

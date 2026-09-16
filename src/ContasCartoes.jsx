@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, instituicaoDe, moeda } from "./theme.js";
+import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCard, IconCash } from "./Icons.jsx";
 import LogoInstituicao from "./LogoInstituicao.jsx";
 
@@ -22,7 +22,11 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [saldos, setSaldos] = useState({});
-  const [faturas, setFaturas] = useState({});
+  // Lançamentos em aberto de cada cartão (por cartao_id) — guardamos a lista
+  // inteira (não só a soma) porque precisamos separar, por cartão, o que cai
+  // no ciclo ATUAL da fatura (usa dia_fechamento de cada um) do total geral
+  // usado pra calcular o disponível.
+  const [lancamentosPorCartao, setLancamentosPorCartao] = useState({});
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [mostrarFormConta, setMostrarFormConta] = useState(false);
@@ -35,7 +39,7 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
         supabase.from("contas").select("*").eq("familia_id", familiaId).order("created_at"),
         supabase.from("cartoes_credito").select("*").eq("familia_id", familiaId).order("created_at"),
         supabase.rpc("saldos_contas"),
-        supabase.from("lancamentos").select("cartao_id, valor").eq("familia_id", familiaId).eq("fatura_paga", false).eq("tipo", "gasto").not("cartao_id", "is", null),
+        supabase.from("lancamentos").select("cartao_id, valor, data").eq("familia_id", familiaId).eq("fatura_paga", false).eq("tipo", "gasto").not("cartao_id", "is", null),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -44,9 +48,9 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
       setContas(c || []);
       setCartoes(k || []);
       setSaldos(Object.fromEntries((s || []).map((r) => [r.conta_id, r.saldo])));
-      const somaPorCartao = {};
-      for (const l of abertos || []) somaPorCartao[l.cartao_id] = (somaPorCartao[l.cartao_id] || 0) + Number(l.valor);
-      setFaturas(somaPorCartao);
+      const porCartao = {};
+      for (const l of abertos || []) (porCartao[l.cartao_id] = porCartao[l.cartao_id] || []).push(l);
+      setLancamentosPorCartao(porCartao);
     } catch (e) {
       setErro(e.message || "Erro ao carregar contas e cartões.");
     } finally {
@@ -151,12 +155,21 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
         {cartoes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhum cartão cadastrado ainda.</div>}
         {cartoes.map((k) => {
           const inst = instituicaoDe(k.bandeira || k.nome);
+          const abertosDoCartao = lancamentosPorCartao[k.id] || [];
+          const hojeMes = new Date().toISOString().slice(0, 7);
+          const buckets = abertosDoCartao.map((l) => mesDaFatura(l.data, k.dia_fechamento));
+          const mesAtual = buckets.filter((m) => m >= hojeMes).sort()[0] || hojeMes;
           // fatura_inicial (migração 6) é a dívida que já existia no cartão
-          // antes de começar a lançar tudo pelo app — soma com os gastos em
-          // aberto lançados depois pra dar a fatura real.
-          const aberto = (faturas[k.id] || 0) + Number(k.fatura_inicial || 0);
-          const disponivel = k.limite != null ? Math.max(0, k.limite - aberto) : null;
-          const pct = k.limite ? Math.min(100, Math.round((aberto / k.limite) * 100)) : 0;
+          // antes de começar a lançar tudo pelo app — entra na fatura ATUAL.
+          // faturaAtual é só o ciclo de agora (pra bater com o que aparece na
+          // tela do cartão); usado soma TUDO em aberto (presente e futuro) +
+          // limite_comprometido_extra (migração 7, parcelas em andamento que
+          // o app ainda não conhece) — é isso que define o disponível de
+          // verdade, não só a fatura do mês.
+          const faturaAtual = abertosDoCartao.filter((_, i) => buckets[i] === mesAtual).reduce((s, l) => s + Number(l.valor), 0) + Number(k.fatura_inicial || 0);
+          const usado = abertosDoCartao.reduce((s, l) => s + Number(l.valor), 0) + Number(k.fatura_inicial || 0) + Number(k.limite_comprometido_extra || 0);
+          const disponivel = k.limite != null ? Math.max(0, k.limite - usado) : null;
+          const pct = k.limite ? Math.min(100, Math.round((usado / k.limite) * 100)) : 0;
           return (
             <button
               key={k.id}
@@ -171,15 +184,19 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
                 <LogoInstituicao nome={k.bandeira || k.nome} size={30} claro />
               </div>
               <div>
-                <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Fatura atual</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", marginTop: 2 }}>{moeda(aberto)}</div>
+                {/* O número em destaque no cartão é o DISPONÍVEL (o que
+                    importa no dia a dia é quanto ainda dá pra gastar) — o
+                    limite total e a fatura do mês ficam na linha pequena
+                    abaixo, junto com a barra de uso. */}
+                <div style={{ fontSize: 10.5, fontWeight: 700, color: "rgba(255,255,255,0.6)", textTransform: "uppercase", letterSpacing: "0.06em" }}>Disponível</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: "#fff", marginTop: 2 }}>{disponivel != null ? moeda(disponivel) : "—"}</div>
                 {k.limite != null && (
                   <>
                     <div style={{ height: 6, borderRadius: 100, background: "rgba(255,255,255,0.2)", marginTop: 8 }}>
                       <div style={{ width: `${pct}%`, height: "100%", borderRadius: 100, background: "#fff" }} />
                     </div>
                     <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, fontWeight: 600, color: "rgba(255,255,255,0.6)", marginTop: 6 }}>
-                      <span>Disponível {moeda(disponivel)} de {moeda(k.limite)}</span>
+                      <span>de {moeda(k.limite)} · fatura atual {moeda(faturaAtual)}</span>
                       <span>{k.dia_fechamento ? `fecha dia ${k.dia_fechamento}` : ""}</span>
                     </div>
                   </>

@@ -55,7 +55,11 @@ export default function CartaoDetalhe({ cartaoId, familiaId, onVoltar, onSalvo }
   const totalFaturaAtual = itensFaturaAtual.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0);
   const proximosMeses = mesesOrdenados.filter((m) => m > mesAtual).slice(0, 3);
 
-  const usado = lancamentosAbertos.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0);
+  // limite_comprometido_extra (migração 7): compras parceladas em andamento
+  // que o app ainda não conhece lançamento por lançamento — consomem limite
+  // mas ainda não aparecem na fatura atual nem em lancamentosAbertos, então
+  // entram aqui (no "usado" que define o disponível) e não em totalFaturaAtual.
+  const usado = lancamentosAbertos.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0) + Number(cartao?.limite_comprometido_extra || 0);
   const disponivel = cartao?.limite != null ? Math.max(0, cartao.limite - usado) : null;
   const pctUsado = cartao?.limite ? Math.min(100, Math.round((usado / cartao.limite) * 100)) : 0;
 

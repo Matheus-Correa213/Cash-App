@@ -1,0 +1,35 @@
+-- ============================================================
+-- CORREA CASH — Migração 7: limite comprometido em parcelas futuras (16/09/2026)
+-- Rode depois da migração 6.
+--
+-- Por quê: fatura_inicial (migração 6) resolve "a fatura ATUAL já está em
+-- R$X" — mas não resolve o caso de um cartão que já tem COMPRAS PARCELADAS
+-- em andamento antes de você começar a lançar tudo pelo app. Uma compra de
+-- R$6.000 em 10x consome o limite inteiro na hora, mas só a parcela do mês
+-- (R$600) aparece na fatura — as outras 9 ainda vão aparecer, mês a mês, no
+-- futuro. Se o app só souber da fatura atual, ele calcula "disponível" como
+-- limite − fatura atual, o que fica MAIOR do que o disponível real do banco
+-- (que já desconta as parcelas futuras) — foi exatamente esse erro que
+-- apareceu na tela: limite disponível mostrando R$ 13.615,46 quando o banco
+-- mostra R$ 3.209,15 de verdade, porque havia compras parceladas em aberto
+-- que o app não sabia existir.
+--
+-- `limite_comprometido_extra` é esse "resto": quanto do limite está preso em
+-- compromissos futuros que ainda não têm lançamento individual no app. Ele é
+-- calculado automaticamente (limite − fatura_atual − limite_disponivel
+-- informado) sempre que você manda pro COSMO o "limite disponível" real do
+-- cartão, e entra na conta de "disponível" em todo lugar que o app mostra
+-- (Contas e cartões, tela do cartão, Painel).
+--
+-- Limitação conhecida: como essas parcelas futuras não são lançamentos
+-- individuais, esse valor não "some sozinho" mês a mês — ele fica como está
+-- até você informar um novo "limite disponível" (recalibrando) ou até você
+-- lançar as parcelas que faltam uma por uma pela tela "Novo lançamento"
+-- (parcelamento), que já sabe fazer esse controle certinho, mês a mês, sem
+-- precisar desse campo de correção.
+-- ============================================================
+
+alter table cartoes_credito add column if not exists limite_comprometido_extra numeric(12,2) not null default 0;
+
+-- Fim. Confira no Table Editor se "cartoes_credito" ganhou a coluna
+-- "limite_comprometido_extra" (numérica, padrão 0).
