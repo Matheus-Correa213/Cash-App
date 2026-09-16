@@ -237,8 +237,11 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
 }
 
 function WidgetCartao({ cartao, lancamentos, onNavegar }) {
+  // fatura_inicial (migração 6) é a dívida que já existia no cartão antes de
+  // começar a lançar tudo pelo app — sem somar ela aqui, o widget mostrava
+  // uma fatura menor (ou zerada) do que a real, mesmo com o limite certo.
   const aberto = useMemo(
-    () => lancamentos.filter((l) => l.cartao_id === cartao.id && !l.fatura_paga && l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0),
+    () => lancamentos.filter((l) => l.cartao_id === cartao.id && !l.fatura_paga && l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0) + Number(cartao.fatura_inicial || 0),
     [lancamentos, cartao]
   );
   const inst = instituicaoDe(cartao.bandeira || cartao.nome);

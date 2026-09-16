@@ -318,6 +318,10 @@ create table if not exists cartoes_credito (
   limite numeric(12,2),
   dia_fechamento smallint check (dia_fechamento between 1 and 31),
   dia_vencimento smallint check (dia_vencimento between 1 and 31),
+  -- Dívida que já existia no cartão antes de começar a lançar tudo pelo app
+  -- (ver migração 6) — a fatura mostrada na tela é isto + soma dos gastos em
+  -- aberto lançados depois; zera sozinha quando a fatura é paga pelo app.
+  fatura_inicial numeric(12,2) not null default 0,
   visivel_para_restrito boolean not null default false,
   created_at timestamptz not null default now()
 );
@@ -382,6 +386,26 @@ as $$
   group by c.id, c.saldo_inicial;
 $$;
 
+-- Em qual "mês de fatura" (primeiro dia do mês, como date) um lançamento
+-- cai, dado o dia de fechamento do cartão — replica em SQL a mesma regra de
+-- mesDaFatura() no frontend (theme.js). Compras feitas depois do fechamento
+-- entram na fatura do mês seguinte, não na atual.
+create or replace function mes_fatura_lancamento(p_data date, p_dia_fechamento int)
+returns date
+language sql immutable
+as $$
+  select case
+    when p_dia_fechamento is null or extract(day from p_data) <= p_dia_fechamento
+      then date_trunc('month', p_data)::date
+    else (date_trunc('month', p_data) + interval '1 month')::date
+  end;
+$$;
+
+-- pagar_fatura_cartao só cobra e quita a fatura do CICLO ATUAL (mesmo
+-- cálculo que a tela "Fatura atual" usa), nunca as parcelas futuras de uma
+-- compra parcelada — cartão de crédito não é uma conta de subtração simples:
+-- uma compra de R$6.000 em 10x consome o limite inteiro na hora, mas só a
+-- parcela do mês entra na fatura atual.
 create or replace function pagar_fatura_cartao(p_cartao_id uuid, p_descricao text default null)
 returns lancamentos
 language plpgsql security definer
@@ -392,6 +416,7 @@ declare
   v_papel text := meu_papel();
   v_membro_id uuid := meu_membro_id();
   v_cartao cartoes_credito;
+  v_mes_atual date;
   v_total numeric;
   v_lancamento lancamentos;
 begin
@@ -410,9 +435,21 @@ begin
     raise exception 'Este cartão não tem uma conta de pagamento configurada.';
   end if;
 
-  select coalesce(sum(valor), 0) into v_total
+  select min(mes) into v_mes_atual
+    from (
+      select mes_fatura_lancamento(data, v_cartao.dia_fechamento) as mes
+        from lancamentos
+        where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto'
+    ) t
+    where mes >= date_trunc('month', current_date)::date;
+  if v_mes_atual is null then
+    v_mes_atual := date_trunc('month', current_date)::date;
+  end if;
+
+  select coalesce(v_cartao.fatura_inicial, 0) + coalesce(sum(valor), 0) into v_total
     from lancamentos
-    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto';
+    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto'
+      and mes_fatura_lancamento(data, v_cartao.dia_fechamento) = v_mes_atual;
 
   if v_total <= 0 then
     raise exception 'Não há fatura em aberto para este cartão.';
@@ -427,13 +464,17 @@ begin
     returning * into v_lancamento;
 
   update lancamentos set fatura_paga = true
-    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto' and id <> v_lancamento.id;
+    where cartao_id = p_cartao_id and fatura_paga = false and tipo = 'gasto' and id <> v_lancamento.id
+      and mes_fatura_lancamento(data, v_cartao.dia_fechamento) = v_mes_atual;
+
+  update cartoes_credito set fatura_inicial = 0 where id = p_cartao_id;
 
   return v_lancamento;
 end;
 $$;
 
 grant execute on function saldos_contas() to authenticated;
+grant execute on function mes_fatura_lancamento(date, int) to authenticated;
 grant execute on function pagar_fatura_cartao(uuid, text) to authenticated;
 
 -- ============================================================

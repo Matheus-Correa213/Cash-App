@@ -151,7 +151,10 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
         {cartoes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhum cartão cadastrado ainda.</div>}
         {cartoes.map((k) => {
           const inst = instituicaoDe(k.bandeira || k.nome);
-          const aberto = faturas[k.id] || 0;
+          // fatura_inicial (migração 6) é a dívida que já existia no cartão
+          // antes de começar a lançar tudo pelo app — soma com os gastos em
+          // aberto lançados depois pra dar a fatura real.
+          const aberto = (faturas[k.id] || 0) + Number(k.fatura_inicial || 0);
           const disponivel = k.limite != null ? Math.max(0, k.limite - aberto) : null;
           const pct = k.limite ? Math.min(100, Math.round((aberto / k.limite) * 100)) : 0;
           return (

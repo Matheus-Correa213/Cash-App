@@ -48,10 +48,14 @@ export default function CartaoDetalhe({ cartaoId, familiaId, onVoltar, onSalvo }
   const mesesOrdenados = Object.keys(porMesFatura).sort();
   const mesAtual = mesesOrdenados.find((m) => m >= hojeMes) || hojeMes;
   const itensFaturaAtual = porMesFatura[mesAtual] || [];
-  const totalFaturaAtual = itensFaturaAtual.reduce((s, l) => s + Number(l.valor), 0);
+  // fatura_inicial (migração 6) é a dívida que já existia no cartão antes de
+  // começar a lançar tudo pelo app — entra na fatura ATUAL (é dívida já
+  // vencida/a vencer agora, não uma parcela futura), e some sozinha quando a
+  // fatura é paga pelo app (a RPC pagar_fatura_cartao zera ela junto).
+  const totalFaturaAtual = itensFaturaAtual.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0);
   const proximosMeses = mesesOrdenados.filter((m) => m > mesAtual).slice(0, 3);
 
-  const usado = lancamentosAbertos.reduce((s, l) => s + Number(l.valor), 0);
+  const usado = lancamentosAbertos.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0);
   const disponivel = cartao?.limite != null ? Math.max(0, cartao.limite - usado) : null;
   const pctUsado = cartao?.limite ? Math.min(100, Math.round((usado / cartao.limite) * 100)) : 0;
 

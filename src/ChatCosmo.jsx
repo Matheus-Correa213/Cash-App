@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, FRENTES_GASTO, FONTES_RECEITA, frenteDe, instituicaoDe, moeda } from "./theme.js";
+import { C, FRENTES_GASTO, FONTES_RECEITA, frenteDe, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
@@ -162,7 +162,20 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
 
   async function confirmarLancamento(dados) {
     const opcoesPagamento = [...contas.map((c) => ({ tipo: "conta", id: c.id, nome: c.nome })), ...cartoes.map((k) => ({ tipo: "cartao", id: k.id, nome: k.nome }))];
-    const achado = dados.pago_com_nome ? opcoesPagamento.find((o) => o.nome.toLowerCase().includes(String(dados.pago_com_nome).toLowerCase())) : null;
+    // Mesma correção aplicada antes em contas/cartões (encontrarAlvo): achar
+    // por id primeiro (o jeito confiável), com o nome tolerante como reforço
+    // — antes disso, um lançamento só achava a conta/cartão por
+    // `.includes()` puro no nome (sem tirar acento/espaço), então bastava a
+    // IA escrever o nome um pouco diferente pra o gasto ficar sem conta_id
+    // NEM cartao_id nenhum — lançado, mas sem tirar de lugar nenhum, o mesmo
+    // jeito silencioso de "não bateu em nada" que já resolvemos noutros
+    // lugares.
+    let achado = dados.pago_com_id ? opcoesPagamento.find((o) => o.id === dados.pago_com_id) : null;
+    if (!achado && dados.pago_com_nome) {
+      const alvo = normalizar(dados.pago_com_nome);
+      achado = opcoesPagamento.find((o) => normalizar(o.nome) === alvo)
+        || opcoesPagamento.find((o) => normalizar(o.nome).includes(alvo) || alvo.includes(normalizar(o.nome)));
+    }
     const { error } = await supabase.from("lancamentos").insert({
       familia_id: membro.familia_id,
       membro_id: membro.id,
@@ -175,7 +188,8 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       cartao_id: achado?.tipo === "cartao" ? achado.id : null,
     });
     if (error) throw error;
-    return `${dados.tipo === "receita" ? "Receita lançada" : "Gasto lançado"}: ${moeda(Number(dados.valor))}${dados.descricao ? ` — ${dados.descricao}` : ""}`;
+    const rotuloPagamento = achado ? ` (${achado.tipo === "conta" ? "de" : "no cartão"} ${achado.nome})` : "";
+    return `${dados.tipo === "receita" ? "Receita lançada" : "Gasto lançado"}: ${moeda(Number(dados.valor))}${dados.descricao ? ` — ${dados.descricao}` : ""}${rotuloPagamento}`;
   }
 
   // Normaliza um nome pra comparação tolerante (sem acento, sem espaços
@@ -269,10 +283,16 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
         limite: Number(dados.limite) || 0,
         dia_fechamento: dados.dia_fechamento != null ? Number(dados.dia_fechamento) : null,
         dia_vencimento: dados.dia_vencimento != null ? Number(dados.dia_vencimento) : null,
+        // fatura_inicial (migração 6): a fatura que já está em aberto no
+        // cartão de verdade, informada de uma vez em vez de lançar compra por
+        // compra — sem isso, "fatura atual" que a pessoa manda no chat não
+        // tinha campo nenhum pra ir e ficava sempre em R$ 0,00 na tela.
+        fatura_inicial: Number(dados.fatura_atual) || 0,
         visivel_para_restrito: false,
       });
       if (error) throw error;
-      return `Cartão criado: ${dados.nome} (limite ${moeda(Number(dados.limite) || 0)})`;
+      const detalheFatura = dados.fatura_atual ? `, fatura atual ${moeda(Number(dados.fatura_atual))}` : "";
+      return `Cartão criado: ${dados.nome} (limite ${moeda(Number(dados.limite) || 0)}${detalheFatura})`;
     } else if (acao === "atualizar_cartao") {
       const alvo = encontrarAlvo(cartoes, dados);
       if (!alvo) throw new Error(`Não encontrei o cartão "${dados.nome_existente || dados.nome}" pra atualizar — confira em Contas e cartões se o nome bate.`);
@@ -283,12 +303,45 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       if (dados.limite !== undefined && dados.limite !== null) patch.limite = Number(dados.limite);
       if (dados.dia_fechamento !== undefined && dados.dia_fechamento !== null) patch.dia_fechamento = Number(dados.dia_fechamento);
       if (dados.dia_vencimento !== undefined && dados.dia_vencimento !== null) patch.dia_vencimento = Number(dados.dia_vencimento);
+      // fatura_atual é uma CORREÇÃO do valor em aberto (igual ao saldo_inicial
+      // de uma conta), não uma soma — por isso, junto com ela, a gente marca
+      // os lançamentos em aberto que já existiam nesse cartão como absorvidos
+      // (fatura_paga = true), senão o valor novo informado seria somado por
+      // cima dos gastos já lançados um por um, contando tudo em dobro.
+      if (dados.fatura_atual !== undefined && dados.fatura_atual !== null) patch.fatura_inicial = Number(dados.fatura_atual);
       const { data, error } = await supabase.from("cartoes_credito").update(patch).eq("id", alvo.id).select();
       if (error) throw error;
       if (!data || data.length === 0) throw new Error(`O cartão "${alvo.nome}" não foi atualizado — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
-      return patch.limite !== undefined
-        ? `Cartão atualizado: ${alvo.nome} — novo limite ${moeda(patch.limite)}`
-        : `Cartão atualizado: ${alvo.nome}`;
+      if (patch.fatura_inicial !== undefined) {
+        // Só absorve (marca como paga) a fatura do CICLO ATUAL — nunca as
+        // parcelas futuras de uma compra parcelada. Cartão de crédito não é
+        // uma conta de subtração simples: uma compra de R$6.000 em 10x
+        // consome o limite inteiro na hora da compra, mas só a parcela do mês
+        // (R$600) entra na fatura atual — as outras 9 continuam em aberto,
+        // esperando o mês delas chegar. Sem esse filtro, corrigir a "fatura
+        // atual" pelo chat apagaria o rastro de parcelas que ainda nem
+        // venceram (o mesmo cuidado que pagar_fatura_cartao tem no banco).
+        const diaFechamentoEfetivo = patch.dia_fechamento !== undefined ? patch.dia_fechamento : alvo.dia_fechamento;
+        const { data: abertos, error: erroAbertos } = await supabase
+          .from("lancamentos").select("id, data")
+          .eq("cartao_id", alvo.id).eq("fatura_paga", false).eq("tipo", "gasto");
+        if (erroAbertos) {
+          console.error("Não consegui ler os lançamentos em aberto deste cartão:", erroAbertos.message);
+        } else if (abertos && abertos.length > 0) {
+          const hojeMes = new Date().toISOString().slice(0, 7);
+          const buckets = abertos.map((l) => mesDaFatura(l.data, diaFechamentoEfetivo));
+          const mesAtual = buckets.filter((m) => m >= hojeMes).sort()[0] || hojeMes;
+          const idsCicloAtual = abertos.filter((_, i) => buckets[i] === mesAtual).map((l) => l.id);
+          if (idsCicloAtual.length > 0) {
+            const { error: erroAbsorcao } = await supabase.from("lancamentos").update({ fatura_paga: true }).in("id", idsCicloAtual);
+            if (erroAbsorcao) console.error("Não consegui absorver os lançamentos antigos da fatura deste cartão:", erroAbsorcao.message);
+          }
+        }
+      }
+      const partes = [];
+      if (patch.limite !== undefined) partes.push(`novo limite ${moeda(patch.limite)}`);
+      if (patch.fatura_inicial !== undefined) partes.push(`fatura atual ${moeda(patch.fatura_inicial)}`);
+      return partes.length ? `Cartão atualizado: ${alvo.nome} — ${partes.join(", ")}` : `Cartão atualizado: ${alvo.nome}`;
     } else {
       throw new Error("Ação desconhecida na proposta.");
     }
@@ -498,6 +551,7 @@ function CardPropostaContaOuCartao({ dados, onConfirmar }) {
       {!ehCartao && dados.saldo_inicial != null && <Linha label="Saldo de hoje" valor={moeda(dados.saldo_inicial)} />}
       {ehCartao && dados.bandeira && <Linha label="Bandeira" valor={dados.bandeira} />}
       {ehCartao && dados.limite != null && <Linha label="Limite" valor={moeda(dados.limite)} />}
+      {ehCartao && dados.fatura_atual != null && <Linha label="Fatura atual" valor={moeda(dados.fatura_atual)} />}
       {ehCartao && dados.dia_fechamento != null && <Linha label="Fechamento" valor={`dia ${dados.dia_fechamento}`} />}
       {ehCartao && dados.dia_vencimento != null && <Linha label="Vencimento" valor={`dia ${dados.dia_vencimento}`} />}
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>

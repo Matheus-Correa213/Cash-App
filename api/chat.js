@@ -35,6 +35,7 @@ const FERRAMENTAS = [
         descricao: { type: "string" },
         data: { type: "string", description: "Data no formato YYYY-MM-DD. Se não tiver certeza, use a data de hoje." },
         pago_com_nome: { type: "string", description: "Nome da conta ou cartão mencionado (ex: 'Nubank', 'Inter'), se souber. Deixe vazio se não souber." },
+        pago_com_id: { type: "string", description: "O id EXATO (copie de [id: ...] na lista de contas/cartões que você já viu) da conta ou cartão usado — se você souber qual é, SEMPRE inclua isto junto com pago_com_nome, é assim que o app encontra o registro certo (o nome sozinho pode não bater)." },
       },
       required: ["tipo", "categoria", "valor"],
     },
@@ -57,6 +58,7 @@ const FERRAMENTAS = [
         limite: { type: "number", description: "Só pra cartões — limite total." },
         dia_fechamento: { type: "number", description: "Só pra cartões — dia do mês que a fatura fecha." },
         dia_vencimento: { type: "number", description: "Só pra cartões — dia do mês que a fatura vence." },
+        fatura_atual: { type: "number", description: "Só pra cartões — o valor da fatura do CICLO ATUAL em aberto AGORA (o que vence agora/no próximo vencimento), se o usuário informar (ex: 'fatura atual: 2.784,54'). Isso SUBSTITUI o valor da fatura atual conhecida pelo app (é uma correção do estado real, igual ao saldo_inicial de uma conta) — não é somado a compras já lançadas uma por uma. IMPORTANTE: isto NÃO serve pra registrar uma compra parcelada (ex: 'comprei algo de 6000 em 10x') — uma compra parcelada consome o limite inteiro na hora mas só uma parcela aparece na fatura por mês, e isso só pode ser lançado pela tela 'Novo lançamento' no app (não existe essa ação pelo chat ainda); se o usuário mencionar parcelas, explique isso em vez de usar fatura_atual. Deixe vazio se o usuário não mencionar a fatura." },
       },
       required: ["acao"],
     },
@@ -92,9 +94,11 @@ Cartões de crédito já cadastrados nesta família:
 ${listaCartoes}
 
 Regras importantes:
-- Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Nunca diga que "já lançou" — apenas proponha.
+- Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Se ele mencionar com qual conta ou cartão pagou (ou for óbvio pelo contexto), inclua também o pago_com_id copiado da lista de contas/cartões acima — sem isso, o app pode não conseguir identificar a conta/cartão certo só pelo nome, e o lançamento fica sem tirar de lugar nenhum. Nunca diga que "já lançou" — apenas proponha.
 - Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só. NUNCA pule nenhum item da lista que o usuário mandou, mesmo que sejam 5, 10 ou mais — cada conta/cartão mencionado vira uma chamada de ferramenta própria.
 - Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome, mesmo que o usuário não escreva exatamente igual — "Nubank" no texto do usuário deve casar com "Nubank Croma" da lista, por exemplo) — se já existe algo parecido, use 'atualizar_*' e SEMPRE inclua id_existente copiado EXATAMENTE do campo [id: ...] correspondente da lista acima (é assim que o app encontra o registro certo — não é feito por nome). Só use 'criar_*' quando realmente não existir nada parecido na lista.
+- Sobre cartão de crédito: se o usuário mandar "limite total", "limite disponível" e "fatura atual" juntos, use limite pro limite total e fatura_atual pro valor da fatura — NUNCA tente guardar o "limite disponível" em campo nenhum, ele é sempre calculado sozinho pelo app (limite menos fatura em aberto), então não existe e não deve ser mencionado como se fosse salvo.
+- Cartão de crédito não é uma conta de subtração simples: uma compra parcelada (ex: "comprei um item de 6000 em 10x") consome o LIMITE inteiro na hora da compra, mas só uma parcela entra na fatura de cada mês. Isso ainda não pode ser lançado pelo chat — só pela tela "Novo lançamento" no app, que já sabe dividir e espalhar as parcelas certas pelos meses. Se o usuário descrever uma compra parcelada, não use propor_lancamento nem fatura_atual pra isso — explique que esse tipo de lançamento precisa ser feito em "Novo lançamento" no app.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
 - Seja direto, caloroso e breve — poucas frases, sem enrolação.
 - Nunca dê conselho financeiro genérico não pedido; foque em ajudar com o que foi perguntado.`;
