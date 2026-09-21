@@ -76,7 +76,17 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       setSaldosContas(Object.fromEntries((data || []).map((r) => [r.conta_id, r.saldo])));
     });
     return () => { cancelado = true; };
-  }, [podeEditar, membro?.familia_id]);
+    // CORREÇÃO (21/09/2026): faltava `lancamentos.length` e `contas.length`
+    // aqui — o saldo REAL mora no banco (essa RPC soma saldo_inicial +
+    // lançamentos daquela conta), e antes esse efeito só rodava quando
+    // `podeEditar`/`familia_id` mudavam, ou seja, uma vez ao entrar no
+    // Painel. Lançar um gasto/receita atualiza a lista `lancamentos` (via
+    // `carregarTudo` no OwnerView), mas isso não disparava um novo fetch —
+    // o número só se atualizava se a pessoa saísse do Painel (desmontando
+    // o componente) e voltasse. Agora qualquer mudança na quantidade de
+    // lançamentos ou de contas (nova conta criada, por exemplo) refaz a
+    // busca na hora.
+  }, [podeEditar, membro?.familia_id, lancamentos.length, contas.length]);
   const saldoTotalCasal = useMemo(() => {
     return contas
       .filter((c) => c.tipo !== "poupanca")
@@ -103,7 +113,10 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       setResumoRestrito(data || null);
     });
     return () => { cancelado = true; };
-  }, [podeEditar, membro?.familia_id]);
+    // Mesma correção de 21/09/2026 explicada no efeito de `saldos_contas`
+    // acima: sem `lancamentos.length`/`contas.length`, o resumo da Alessia
+    // também só atualizava ao sair e voltar pro Painel.
+  }, [podeEditar, membro?.familia_id, lancamentos.length, contas.length]);
 
   const saldoGeralPermitido = podeEditar || !!resumoRestrito?.permitido;
   const saldo = podeEditar ? saldoTotalCasal : Number(resumoRestrito?.saldo || 0);

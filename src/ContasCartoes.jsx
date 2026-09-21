@@ -29,7 +29,7 @@ const TIPOS_CONTA = [
 // papel. O RLS (ver migração 10) já garante, do lado do banco, que quem tem
 // acesso restrito só edita/exclui o que ela já enxerga — o que ela não vê,
 // ela nem sabe que existe.
-export default function ContasCartoes({ familiaId, onAbrirCartao }) {
+export default function ContasCartoes({ familiaId, onAbrirCartao, onVoltar }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [saldos, setSaldos] = useState({});
@@ -131,6 +131,12 @@ export default function ContasCartoes({ familiaId, onAbrirCartao }) {
 
   return (
     <div>
+      {/* Correção 21/09/2026 (falta de botão "voltar" dentro de "Mais"): esta
+          tela é aberta tanto pelo menu "Mais" quanto pelo atalho "Contas" do
+          Painel — nos dois casos, antes dessa correção, não existia nenhum
+          jeito de voltar pro menu anterior sem trocar de aba pela barra de
+          baixo. */}
+      {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 4, padding: 0 }}>‹ Voltar</button>}
       {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
 
       <div style={{ background: C.navy, borderRadius: 18, padding: 20, marginBottom: 16 }}>

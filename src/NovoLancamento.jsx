@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, somarMeses } from "./theme.js";
 import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
@@ -17,7 +17,13 @@ import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
 // resolvido lá) pra este arquivo não precisar saber a diferença entre uma
 // categoria fixa e uma personalizada.
 
-const PARCELAS_OPCOES = [1, 2, 3, 4, 6, 12];
+// Correção 21/09/2026 (pedido do Matheus: "permita colocar a quantidade, de
+// 1 a 15"): antes só dava pra escolher entre um punhado fixo de opções
+// (1/2/3/4/6/12x) — quem parcelava em, por exemplo, 5x, 7x ou 9x não
+// conseguia. Trocado por um campo numérico livre de 1 a 15 (ver o input mais
+// abaixo) — o banco (criar_compra_parcelada) sempre aceitou até 24x, então
+// esse número é só o limite que o Matheus pediu pra tela.
+const MAX_PARCELAS = 15;
 
 export default function NovoLancamento({ membroLogado, membros, contas, cartoes, frentesGasto, fontesReceita, tipoInicial = "gasto", aberto, onAbrir, onFechar, onSalvo }) {
   const [tipo, setTipo] = useState(tipoInicial);
@@ -28,6 +34,15 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
   const [membroId, setMembroId] = useState(membroLogado.id);
   const [pagoCom, setPagoCom] = useState(""); // "" | `conta:<id>` | `cartao:<id>`
   const [parcelas, setParcelas] = useState(1);
+  // Correção 21/09/2026 (pedido do Matheus: "nem sempre a parcela é sem
+  // juros... permita... escrever como as parcelas ficaram"): antes o app
+  // sempre assumia divisão igual e sem juros (valor ÷ parcelas). Esses dois
+  // campos deixam a pessoa digitar o valor REAL de cada parcela (o que
+  // apareceu na fatura), pra quando a operadora cobra juros no parcelamento
+  // — nesse caso `criar_compra_parcelada` usa esse valor em todas as
+  // parcelas, em vez de tentar dividir o total original.
+  const [parcelaComJuros, setParcelaComJuros] = useState(false);
+  const [valorParcelaManual, setValorParcelaManual] = useState("");
   const [tag, setTag] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
@@ -45,16 +60,31 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
     return v / parcelas;
   }, [valor, parcelas]);
 
+  // Some o parcelamento (ex: trocou de "pago com" pra uma conta em vez de
+  // cartão) → limpa tudo que só faz sentido com ele, pra não carregar lixo
+  // de estado pro próximo lançamento.
+  useEffect(() => {
+    if (!mostrarParcelamento) {
+      setParcelas(1);
+      setParcelaComJuros(false);
+      setValorParcelaManual("");
+    }
+  }, [mostrarParcelamento]);
+
   function trocarTipo(novo) {
     setTipo(novo);
     setCategoria(novo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave);
-    if (novo === "receita") { setPagoCom(""); setParcelas(1); }
+    if (novo === "receita") { setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual(""); }
   }
 
   async function salvar(e) {
     e.preventDefault();
     setErro("");
     if (!valor || Number(valor) <= 0) { setErro("Informe um valor válido."); return; }
+    if (mostrarParcelamento && parcelas > 1 && parcelaComJuros && (!valorParcelaManual || Number(valorParcelaManual) <= 0)) {
+      setErro("Informe o valor de cada parcela, ou desmarque a opção de juros.");
+      return;
+    }
     setSalvando(true);
     try {
       if (mostrarParcelamento && parcelas > 1) {
@@ -67,6 +97,10 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
           p_parcelas: parcelas,
           p_data_compra: data,
           p_tag: tag.trim() || null,
+          // Migração 11 (21/09/2026) — só manda o valor manual quando a
+          // pessoa marcou "veio diferente"; do contrário fica `null` e o
+          // banco continua dividindo o total igualmente, como sempre.
+          p_valor_parcela_manual: parcelaComJuros && valorParcelaManual ? Number(valorParcelaManual) : null,
         });
         if (error) throw error;
       } else {
@@ -80,7 +114,7 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
         });
         if (error) throw error;
       }
-      setValor(""); setDescricao(""); setTag(""); setPagoCom(""); setParcelas(1);
+      setValor(""); setDescricao(""); setTag(""); setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual("");
       onSalvo && onSalvo();
       onFechar && onFechar();
     } catch (e) {
@@ -171,15 +205,51 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
       {mostrarParcelamento && (
         <div style={{ background: "#FDF3FF", borderRadius: 14, padding: "12px 14px", display: "flex", flexDirection: "column", gap: 8 }}>
           <Label>Parcelar em quantas vezes?</Label>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {PARCELAS_OPCOES.map((n) => (
-              <ChipToggle key={n} ativo={parcelas === n} cor="#8A05BE" onClick={() => setParcelas(n)}>{n}x</ChipToggle>
-            ))}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <input
+              type="number" min={1} max={MAX_PARCELAS} value={parcelas}
+              onChange={(e) => {
+                const n = Math.round(Number(e.target.value));
+                setParcelas(Number.isFinite(n) ? Math.max(1, Math.min(MAX_PARCELAS, n)) : 1);
+              }}
+              style={{ width: 64, padding: "8px 10px", borderRadius: 10, border: "1.5px solid #8A05BE", fontSize: 15, fontWeight: 800, color: C.ink, textAlign: "center" }}
+            />
+            <span style={{ fontSize: 12, fontWeight: 600, color: C.inkFaint }}>vezes (de 1 a {MAX_PARCELAS})</span>
           </div>
-          {valorParcela != null && (
-            <div style={{ fontSize: 12.5, fontWeight: 700, color: "#8A05BE" }}>
-              {parcelas}x de {moeda(valorParcela)} — a última parcela cai em {new Date(somarMeses(data, parcelas - 1) + "T00:00:00Z").toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" })}.
-            </div>
+
+          {parcelas > 1 && (
+            <>
+              {!parcelaComJuros && valorParcela != null && (
+                <div style={{ fontSize: 12.5, fontWeight: 700, color: "#8A05BE" }}>
+                  {parcelas}x de {moeda(valorParcela)} — a última parcela cai em {new Date(somarMeses(data, parcelas - 1) + "T00:00:00Z").toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" })}.
+                </div>
+              )}
+
+              {/* Pedido do Matheus (21/09/2026): "nem sempre a parcela é sem
+                  juros" — quando a operadora cobra juros, o valor de cada
+                  parcela na fatura é maior do que a divisão simples do
+                  total. Esta opção deixa digitar o valor real. */}
+              <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, fontWeight: 600, color: C.inkMute, cursor: "pointer" }}>
+                <input type="checkbox" checked={parcelaComJuros} onChange={(e) => { setParcelaComJuros(e.target.checked); if (!e.target.checked) setValorParcelaManual(""); }} />
+                O valor de cada parcela veio diferente (ex: juros da operadora)
+              </label>
+
+              {parcelaComJuros && (
+                <div>
+                  <Label>Valor de cada parcela (o que apareceu/vai aparecer na fatura)</Label>
+                  <input
+                    type="number" step="0.01" placeholder="0,00" value={valorParcelaManual}
+                    onChange={(e) => setValorParcelaManual(e.target.value)}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 10, border: "1.5px solid #8A05BE", fontSize: 15, fontWeight: 800, color: C.ink, marginTop: 4 }}
+                  />
+                  {Number(valorParcelaManual) > 0 && (
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#8A05BE", marginTop: 6 }}>
+                      {parcelas}x de {moeda(Number(valorParcelaManual))} = {moeda(Number(valorParcelaManual) * parcelas)} no total (a compra em si foi de {moeda(Number(valor) || 0)}).
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
           )}
         </div>
       )}

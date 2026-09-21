@@ -34,12 +34,13 @@ const ABAS = [
 // por vez (o casal decide o que aconteceu naquele mês); a de Tags é o
 // contrário de propósito — um projeto como "Casamento" ou "TCC" atravessa
 // vários meses, então ali o total é sempre desde o início.
-export default function Relatorios({ familiaId, frentesGasto }) {
+export default function Relatorios({ familiaId, frentesGasto, onVoltar }) {
   const [aba, setAba] = useState("categorias");
   const [mes, setMes] = useState(mesAtualStr());
 
   return (
     <div>
+      {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10, padding: 0 }}>‹ Voltar</button>}
       <div style={{ ...row, marginBottom: 4 }}>
         {ABAS.map(([v, l]) => (
           <button key={v} style={aba === v ? btn : btnGhost} onClick={() => setAba(v)}>{l}</button>

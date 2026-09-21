@@ -162,8 +162,14 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   }
 
   function abrirAba(nomeAba) {
+    // Correção 21/09/2026 (falta de "voltar" dentro de "Mais"): antes, tocar
+    // de novo em "Mais" enquanto já se estava dentro de um sub-tela (ex:
+    // Relatórios) não fazia nada — `nomeAba` já era "mais", então o `if`
+    // abaixo nunca resetava `tela`, e a pessoa ficava presa lá (mesmo esse
+    // reset sozinho já ajudava: tocar em "Mais" de novo agora volta pro
+    // menu). Isso complementa o `onVoltar` que cada sub-tela ganhou.
+    if (nomeAba !== "mais" || aba === "mais") setTela(null);
     setAba(nomeAba);
-    if (nomeAba !== "mais") setTela(null);
   }
 
   return (
@@ -212,9 +218,9 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
     const cartaoId = tela.split(":")[1];
     return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} contas={contas} podeEditar={podeEditar} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
   }
-  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
-  if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} />;
-  if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} frentesGasto={frentesGasto} />;
+  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} onVoltar={() => setTela(null)} />;
+  if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
+  if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} frentesGasto={frentesGasto} onVoltar={() => setTela(null)} />;
   if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
   if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "importar") return <ImportarArquivo membro={membro} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;

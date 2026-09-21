@@ -345,6 +345,9 @@ create table if not exists contas (
   nome text not null,
   tipo text not null default 'corrente' check (tipo in ('corrente', 'poupanca', 'carteira', 'outro')),
   instituicao text,
+  -- "Titular" (migração 3, 16/09/2026) — de quem é essa conta (você ou a
+  -- Alessia), pra distinguir sem precisar de uma tabela nova.
+  titular text,
   saldo_inicial numeric(12,2) not null default 0,
   visivel_para_restrito boolean not null default false,
   created_at timestamptz not null default now()
@@ -356,6 +359,7 @@ create table if not exists cartoes_credito (
   conta_pagamento_id uuid references contas(id) on delete set null,
   nome text not null,
   bandeira text,
+  titular text,
   limite numeric(12,2),
   dia_fechamento smallint check (dia_fechamento between 1 and 31),
   dia_vencimento smallint check (dia_vencimento between 1 and 31),
@@ -390,9 +394,20 @@ alter table lancamentos add column if not exists cartao_id uuid references carto
 alter table lancamentos add column if not exists tag text;
 alter table lancamentos add column if not exists fatura_paga boolean not null default false;
 
+-- Parcelamento (migração 3, 16/09/2026) — CORREÇÃO 21/09/2026: estas 3
+-- colunas e a função criar_compra_parcelada() (mais abaixo) tinham ficado
+-- de fora deste script por engano — só existiam na migração 3 avulsa. Um
+-- banco novo, rodando só este arquivo, não conseguia lançar nenhuma compra
+-- parcelada (erro "function does not exist"). Cada parcela vira um
+-- lançamento próprio, já datado no mês da fatura em que cai.
+alter table lancamentos add column if not exists parcela_atual smallint;
+alter table lancamentos add column if not exists parcela_total smallint;
+alter table lancamentos add column if not exists compra_parcelada_id uuid;
+
 create index if not exists idx_lancamentos_conta on lancamentos (conta_id);
 create index if not exists idx_lancamentos_cartao on lancamentos (cartao_id);
 create index if not exists idx_lancamentos_tag on lancamentos (tag);
+create index if not exists idx_lancamentos_compra_parcelada on lancamentos (compra_parcelada_id);
 
 alter table contas enable row level security;
 alter table cartoes_credito enable row level security;
@@ -452,6 +467,37 @@ create policy "cartoes: familia pode excluir conforme visibilidade" on cartoes_c
 create policy "investimentos: so o dono ve e mexe" on investimentos
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+-- Assinaturas (migração 3, 16/09/2026) — CORREÇÃO 21/09/2026: esta tabela
+-- também tinha ficado de fora do script (só existia na migração 3 avulsa).
+-- tipo_cobranca decide o comportamento: 'cartao' -> a assinatura já é
+-- lançada nas parcelas/fatura do cartão normalmente; 'debito' -> o COSMO
+-- confere o saldo da conta no dia da cobrança e, se der, lança sozinho.
+create table if not exists assinaturas (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  nome text not null,
+  categoria text not null default 'recorrentes',
+  valor numeric(12,2) not null,
+  dia_cobranca smallint not null check (dia_cobranca between 1 and 31),
+  tipo_cobranca text not null check (tipo_cobranca in ('cartao', 'debito')),
+  cartao_id uuid references cartoes_credito(id) on delete set null,
+  conta_id uuid references contas(id) on delete set null,
+  ativo boolean not null default true,
+  created_at timestamptz not null default now()
+);
+
+-- Liga um lançamento de volta à assinatura que o gerou.
+alter table lancamentos add column if not exists assinatura_id uuid references assinaturas(id) on delete set null;
+create index if not exists idx_lancamentos_assinatura on lancamentos (assinatura_id);
+
+alter table assinaturas enable row level security;
+
+create policy "assinaturas: dono ve e mexe em tudo" on assinaturas
+  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
+  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+grant select, insert, update, delete on assinaturas to authenticated;
 
 -- categorias — migração 10 (16/09/2026): as 6 frentes de gasto e 4 fontes de
 -- receita da doutrina financeira do COSMO (theme.js) continuam fixas — esta
@@ -594,6 +640,101 @@ grant execute on function saldos_contas() to authenticated;
 grant execute on function mes_fatura_lancamento(date, int) to authenticated;
 grant execute on function pagar_fatura_cartao(uuid, text) to authenticated;
 
+-- criar_compra_parcelada (migração 3, 16/09/2026; CORREÇÃO 21/09/2026: tinha
+-- ficado de fora deste script, só existia na migração 3 avulsa — um banco
+-- novo rodando só este arquivo não conseguia lançar nenhuma compra
+-- parcelada). Insere as N parcelas de uma compra no cartão como N
+-- lançamentos atômicos (tudo ou nada), cada um já com a data certa (um mês
+-- depois do outro).
+--
+-- p_valor_parcela_manual (migração 11, 21/09/2026) — quando a operadora
+-- cobra juros no parcelamento, a parcela que aparece na fatura NÃO é o
+-- valor da compra dividido igualmente. Quando esse parâmetro vem
+-- preenchido, ele manda: todas as parcelas saem com esse valor exato (o
+-- total "de verdade", com juros e tudo, passa a ser valor_parcela ×
+-- parcelas). Sem ele, continua dividindo p_valor_total igualmente, com a
+-- última parcela absorvendo o arredondamento — exatamente como sempre foi.
+create or replace function criar_compra_parcelada(
+  p_cartao_id uuid,
+  p_membro_id uuid,
+  p_categoria text,
+  p_descricao text,
+  p_valor_total numeric,
+  p_parcelas int,
+  p_data_compra date,
+  p_tag text default null,
+  p_valor_parcela_manual numeric default null
+)
+returns uuid
+language plpgsql security definer
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_familia_id uuid := minha_familia_id();
+  v_papel text := meu_papel();
+  v_meu_membro_id uuid := meu_membro_id();
+  v_grupo_id uuid := gen_random_uuid();
+  v_valor_parcela numeric;
+  v_soma_parcial numeric := 0;
+  v_valor_desta numeric;
+  i int;
+begin
+  if v_uid is null then
+    raise exception 'Não autenticado.';
+  end if;
+  if v_familia_id is null then
+    raise exception 'Você não pertence a nenhuma família no Cash App.';
+  end if;
+  if v_papel <> 'dono' and p_membro_id <> v_meu_membro_id then
+    raise exception 'Você só pode lançar compras em seu próprio nome.';
+  end if;
+  if p_parcelas is null or p_parcelas < 1 or p_parcelas > 24 then
+    raise exception 'Número de parcelas inválido (use entre 1 e 24).';
+  end if;
+
+  if p_valor_parcela_manual is not null then
+    if p_valor_parcela_manual <= 0 then
+      raise exception 'Valor da parcela inválido.';
+    end if;
+    v_valor_parcela := round(p_valor_parcela_manual, 2);
+  else
+    if p_valor_total is null or p_valor_total <= 0 then
+      raise exception 'Valor da compra inválido.';
+    end if;
+    v_valor_parcela := round(p_valor_total / p_parcelas, 2);
+  end if;
+
+  for i in 1..p_parcelas loop
+    if p_valor_parcela_manual is not null then
+      v_valor_desta := v_valor_parcela;
+    elsif i = p_parcelas then
+      v_valor_desta := round(p_valor_total - v_soma_parcial, 2);
+    else
+      v_valor_desta := v_valor_parcela;
+      v_soma_parcial := v_soma_parcial + v_valor_desta;
+    end if;
+
+    insert into lancamentos (
+      familia_id, membro_id, tipo, categoria, valor, descricao, data,
+      cartao_id, tag, parcela_atual, parcela_total, compra_parcelada_id
+    ) values (
+      v_familia_id, p_membro_id, 'gasto', p_categoria, v_valor_desta,
+      case when p_parcelas > 1 then coalesce(nullif(trim(p_descricao), ''), 'Compra parcelada') || ' (' || i || '/' || p_parcelas || ')'
+           else nullif(trim(p_descricao), '') end,
+      (p_data_compra + make_interval(months => i - 1))::date,
+      p_cartao_id, nullif(trim(p_tag), ''),
+      case when p_parcelas > 1 then i else null end,
+      case when p_parcelas > 1 then p_parcelas else null end,
+      case when p_parcelas > 1 then v_grupo_id else null end
+    );
+  end loop;
+
+  return v_grupo_id;
+end;
+$$;
+
+grant execute on function criar_compra_parcelada(uuid, uuid, text, text, numeric, int, date, text, numeric) to authenticated;
+
 -- ============================================================
 -- Chat do COSMO persistente — adicionado 16/09/2026. Ver
 -- supabase-migracao-5-chat-persistente.sql se você já tem um banco rodando.
@@ -623,5 +764,5 @@ grant select, insert, update, delete on chat_mensagens to authenticated;
 
 -- Fim do script. Depois de rodar, confira em Table Editor se as tabelas
 -- (familias, membros, lancamentos, contas, cartoes_credito, investimentos,
--- chat_mensagens) aparecem, cada uma com o cadeado de RLS ativado (ícone ao
--- lado do nome).
+-- assinaturas, categorias, chat_mensagens) aparecem, cada uma com o cadeado
+-- de RLS ativado (ícone ao lado do nome).

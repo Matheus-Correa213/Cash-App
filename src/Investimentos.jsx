@@ -38,7 +38,7 @@ const nomeTipo = (t) => TIPOS.find((x) => x[0] === t)?.[1] || t;
 // Como o RLS bloqueia até a LEITURA pra quem não é dono, a lista sempre
 // chega vazia pra ela — sem o aviso abaixo, isso pareceria "nenhum
 // investimento cadastrado ainda", o que não é verdade, só está escondido.
-export default function Investimentos({ familiaId, podeEditar = true }) {
+export default function Investimentos({ familiaId, podeEditar = true, onVoltar }) {
   const [itens, setItens] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
@@ -86,16 +86,24 @@ export default function Investimentos({ familiaId, podeEditar = true }) {
 
   if (carregando) return <div style={cardStyle}>Carregando…</div>;
 
+  const BotaoVoltar = () => onVoltar
+    ? <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 10, padding: 0 }}>‹ Voltar</button>
+    : null;
+
   if (!podeEditar && itens.length === 0) {
     return (
-      <div style={cardStyle}>
-        <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Investimentos são geridos pelo administrador da família.</div>
+      <div>
+        <BotaoVoltar />
+        <div style={cardStyle}>
+          <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Investimentos são geridos pelo administrador da família.</div>
+        </div>
       </div>
     );
   }
 
   return (
     <div>
+      <BotaoVoltar />
       {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
 
       <div style={row}>
