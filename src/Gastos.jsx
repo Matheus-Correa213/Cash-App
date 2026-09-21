@@ -1,23 +1,30 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, FRENTES_GASTO, frenteDe, moeda, inicioMesISO } from "./theme.js";
+import { C, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
-import { ICONE_FRENTE_GASTO } from "./Icons.jsx";
 
-// Tela dedicada de Gastos — espaço próprio, com as 6 frentes de gasto da
+// Tela dedicada de Gastos — espaço próprio, com as frentes de gasto da
 // doutrina financeira do COSMO (dia a dia, recorrentes, reserva, projetos,
-// casa/família, saúde) em vez de uma lista de categorias sem contexto.
+// casa/família, saúde) mais as que a própria família criar (migração 10,
+// categorias personalizadas, 16/09/2026) em vez de uma lista sem contexto.
+//
+// `frentesGasto` já vem mesclada (fixas + personalizadas) de OwnerView.jsx,
+// cada item com `Icone` (componente) resolvido.
 
-export default function Gastos({ membro, membros, lancamentos, contas, cartoes, nomePorMembroId, onSalvo }) {
+export default function Gastos({ membro, membros, lancamentos, contas, cartoes, frentesGasto, fontesReceita, nomePorMembroId, onSalvo }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
+
+  function frenteDe(categoria) {
+    return frentesGasto.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line, corTexto: C.inkMute, Icone: null };
+  }
 
   const doMes = useMemo(() => lancamentos.filter((l) => l.tipo === "gasto" && l.data >= inicioMesISO()), [lancamentos]);
   const total = useMemo(() => doMes.reduce((s, l) => s + Number(l.valor), 0), [doMes]);
   const porFrente = useMemo(() => {
     const m = {};
     for (const l of doMes) m[l.categoria] = (m[l.categoria] || 0) + Number(l.valor);
-    return FRENTES_GASTO.map((f) => ({ ...f, total: m[f.chave] || 0 })).filter((f) => f.total > 0);
-  }, [doMes]);
+    return frentesGasto.map((f) => ({ ...f, total: m[f.chave] || 0 })).filter((f) => f.total > 0);
+  }, [doMes, frentesGasto]);
   const maiorFrente = Math.max(1, ...porFrente.map((f) => f.total));
 
   async function excluir(id) {
@@ -35,14 +42,14 @@ export default function Gastos({ membro, membros, lancamentos, contas, cartoes, 
       </div>
 
       <NovoLancamento
-        membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} tipoInicial="gasto"
+        membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} tipoInicial="gasto"
         aberto={lancamentoAberto} onAbrir={() => setLancamentoAberto(true)} onFechar={() => setLancamentoAberto(false)} onSalvo={onSalvo}
       />
 
       {porFrente.length > 0 && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           {porFrente.map((f) => {
-            const IconeFrente = ICONE_FRENTE_GASTO[f.chave];
+            const IconeFrente = f.Icone;
             return (
               <div key={f.chave} style={{ background: f.corSoft, borderRadius: 14, padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -65,7 +72,7 @@ export default function Gastos({ membro, membros, lancamentos, contas, cartoes, 
         {doMes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, padding: "14px 0" }}>Nenhum gasto lançado este mês ainda.</div>}
         {doMes.map((l) => {
           const f = frenteDe(l.categoria);
-          const IconeLinha = ICONE_FRENTE_GASTO[l.categoria];
+          const IconeLinha = f.Icone;
           // Quem tem acesso restrito só exclui os PRÓPRIOS lançamentos — a
           // mesma regra que a RLS já aplica no DELETE ("membro exclui so o
           // proprio"); escondemos o botão nos lançamentos de outra pessoa

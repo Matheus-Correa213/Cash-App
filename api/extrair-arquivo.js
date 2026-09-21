@@ -17,30 +17,44 @@ const MODELO = "claude-sonnet-4-6";
 
 export const config = { api: { bodyParser: { sizeLimit: "15mb" } } };
 
-const FERRAMENTA_EXTRACAO = {
-  name: "lancamentos_encontrados",
-  description: "Lista os lançamentos (gastos e/ou receitas) encontrados no arquivo.",
-  input_schema: {
-    type: "object",
-    properties: {
-      lancamentos: {
-        type: "array",
-        items: {
-          type: "object",
-          properties: {
-            tipo: { type: "string", enum: ["gasto", "receita"] },
-            categoria: { type: "string", description: "gasto: dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude. receita: trabalho, correa_books, freelas, outros." },
-            descricao: { type: "string" },
-            valor: { type: "number" },
-            data: { type: "string", description: "YYYY-MM-DD" },
+// Migração 10 (categorias personalizadas, 16/09/2026): a descrição de
+// "categoria" era um texto fixo com as 6 frentes de gasto e 4 fontes de
+// receita da doutrina financeira — agora é montada dinamicamente incluindo
+// também as categorias que a própria família criou, pra IA poder propor
+// usando elas quando fizer sentido (ex: a família criou "pet" e tem um
+// gasto de petshop no extrato).
+function montarFerramentaExtracao(categoriasResumo) {
+  const gasto = categoriasResumo?.gasto?.length
+    ? categoriasResumo.gasto.map((c) => c.chave).join(", ")
+    : "dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude";
+  const receita = categoriasResumo?.receita?.length
+    ? categoriasResumo.receita.map((c) => c.chave).join(", ")
+    : "trabalho, correa_books, freelas, outros";
+  return {
+    name: "lancamentos_encontrados",
+    description: "Lista os lançamentos (gastos e/ou receitas) encontrados no arquivo.",
+    input_schema: {
+      type: "object",
+      properties: {
+        lancamentos: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              tipo: { type: "string", enum: ["gasto", "receita"] },
+              categoria: { type: "string", description: `gasto: ${gasto}. receita: ${receita}. Se nenhuma encaixar bem, use a mais próxima.` },
+              descricao: { type: "string" },
+              valor: { type: "number" },
+              data: { type: "string", description: "YYYY-MM-DD" },
+            },
+            required: ["tipo", "categoria", "valor"],
           },
-          required: ["tipo", "categoria", "valor"],
         },
       },
+      required: ["lancamentos"],
     },
-    required: ["lancamentos"],
-  },
-};
+  };
+}
 
 async function extrairTexto(mimeType, base64) {
   const buffer = Buffer.from(base64, "base64");
@@ -74,8 +88,9 @@ export default async function handler(req, res) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return res.status(401).json({ error: "Sessão inválida." });
 
-  const { nomeArquivo, mimeType, base64 } = req.body || {};
+  const { nomeArquivo, mimeType, base64, categoriasResumo } = req.body || {};
   if (!base64 || !mimeType) return res.status(400).json({ error: "Envie um arquivo." });
+  const ferramentaExtracao = montarFerramentaExtracao(categoriasResumo);
 
   try {
     let conteudoUsuario;
@@ -100,7 +115,7 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: MODELO, max_tokens: 2048,
         system: "Você extrai lançamentos financeiros de documentos e imagens pra um app de finanças de um casal. Nunca invente valores que não estão no arquivo. Se não achar nada, devolva uma lista vazia.",
-        tools: [FERRAMENTA_EXTRACAO],
+        tools: [ferramentaExtracao],
         tool_choice: { type: "tool", name: "lancamentos_encontrados" },
         messages: [{ role: "user", content: conteudoUsuario }],
       }),

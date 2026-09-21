@@ -34,7 +34,7 @@ const ABAS = [
 // por vez (o casal decide o que aconteceu naquele mês); a de Tags é o
 // contrário de propósito — um projeto como "Casamento" ou "TCC" atravessa
 // vários meses, então ali o total é sempre desde o início.
-export default function Relatorios({ familiaId }) {
+export default function Relatorios({ familiaId, frentesGasto }) {
   const [aba, setAba] = useState("categorias");
   const [mes, setMes] = useState(mesAtualStr());
 
@@ -53,7 +53,7 @@ export default function Relatorios({ familiaId }) {
         </div>
       )}
 
-      {aba === "categorias" && <RelatorioCategorias familiaId={familiaId} mes={mes} />}
+      {aba === "categorias" && <RelatorioCategorias familiaId={familiaId} mes={mes} frentesGasto={frentesGasto} />}
       {aba === "entradas-saidas" && <RelatorioEntradasSaidas familiaId={familiaId} mes={mes} />}
       {aba === "contas" && <RelatorioContas familiaId={familiaId} />}
       {aba === "tags" && <RelatorioTags familiaId={familiaId} />}
@@ -90,7 +90,7 @@ function useLancamentosDoMes(familiaId, mes) {
   return { lancamentos, carregando, erro };
 }
 
-function RelatorioCategorias({ familiaId, mes }) {
+function RelatorioCategorias({ familiaId, mes, frentesGasto }) {
   const { lancamentos, carregando, erro } = useLancamentosDoMes(familiaId, mes);
   const porCategoria = useMemo(() => {
     const m = {};
@@ -98,6 +98,12 @@ function RelatorioCategorias({ familiaId, mes }) {
     return Object.entries(m).sort((a, b) => b[1] - a[1]);
   }, [lancamentos]);
   const total = porCategoria.reduce((s, [, v]) => s + v, 0);
+  // Migração 10 (categorias personalizadas, 16/09/2026): antes mostrava a
+  // CHAVE crua (ex: "dia_a_dia") — com `frentesGasto` (fixas + criadas pela
+  // família) dá pra mostrar o rótulo de verdade, igual no resto do app.
+  function rotuloDe(chave) {
+    return frentesGasto?.find((f) => f.chave === chave)?.label || chave;
+  }
 
   if (carregando) return <div style={cardStyle}>Carregando…</div>;
   return (
@@ -107,7 +113,7 @@ function RelatorioCategorias({ familiaId, mes }) {
       {porCategoria.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhum gasto neste mês.</div>}
       {porCategoria.map(([cat, val]) => (
         <div key={cat} style={lineItem}>
-          <span style={{ fontSize: 14, color: C.ink, textTransform: "capitalize" }}>{cat}</span>
+          <span style={{ fontSize: 14, color: C.ink }}>{rotuloDe(cat)}</span>
           <span style={{ fontSize: 14, color: C.ink }}>
             <b>{moeda(val)}</b> <span style={{ color: C.inkFaint, fontSize: 12 }}>({total > 0 ? ((val / total) * 100).toFixed(0) : 0}%)</span>
           </span>

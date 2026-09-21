@@ -69,6 +69,40 @@ export function IconUsers(p) { return <Svg {...p}><path d="M17 21v-2a4 4 0 0 0-4
 export function IconCosmo(p) { return <Svg {...p}><circle cx="12" cy="12" r="2" /><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(28 12 12)" /></Svg>; }
 export function IconCosmoFull(p) { return <Svg {...p}><circle cx="12" cy="12" r="2" /><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(28 12 12)" /><ellipse cx="12" cy="12" rx="9" ry="3.6" transform="rotate(-28 12 12)" /></Svg>; }
 
+// Ícones novos pra galeria de categorias personalizadas (migração 10,
+// 16/09/2026) — a família cria a própria categoria e escolhe um destes.
+export function IconStar(p) { return <Svg {...p}><polygon points="12 2 15 9 22 9.5 16.5 14 18.5 21.5 12 17.5 5.5 21.5 7.5 14 2 9.5 9 9 12 2" /></Svg>; }
+export function IconGift(p) { return <Svg {...p}><rect x="3" y="9" width="18" height="12" rx="1.5" /><rect x="2" y="5.5" width="20" height="4" rx="1" /><line x1="12" y1="5.5" x2="12" y2="21" /><path d="M12 5.5C12 3 9.5 1.5 8 2.5 6 4 8 5.5 12 5.5Z" /><path d="M12 5.5C12 3 14.5 1.5 16 2.5c2 1.5 0 3 -4 3Z" /></Svg>; }
+export function IconShoppingCart(p) { return <Svg {...p}><circle cx="9" cy="21" r="1.4" /><circle cx="18" cy="21" r="1.4" /><path d="M2.5 3h2.4l2.3 12.2a2 2 0 0 0 2 1.6h8a2 2 0 0 0 2-1.6L21 8H6" /></Svg>; }
+export function IconPlane(p) { return <Svg {...p}><path d="M11 3 3 10.5l4 1 2.5 3.5 1.5-1 -1-4 4.5-4L21 3l-3.5 7 -4.5 4 1 4 -1.5 1 -3.5-4 -4 1Z" /></Svg>; }
+export function IconCar(p) { return <Svg {...p}><path d="M4 16V11l2-5h12l2 5v5" /><path d="M3 16h18v2a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1v-1H7v1a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-2Z" /><circle cx="7.5" cy="16.5" r="1.4" /><circle cx="16.5" cy="16.5" r="1.4" /></Svg>; }
+export function IconCoffee(p) { return <Svg {...p}><path d="M4 9h13v6a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V9Z" /><path d="M17 10h2a2.5 2.5 0 0 1 0 5h-2" /><path d="M7 5c0-1 1-1 1-2" /><path d="M11 5c0-1 1-1 1-2" /></Svg>; }
+export function IconMusic(p) { return <Svg {...p}><path d="M9 18V5l11-2v13" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="17.5" cy="16" r="2.5" /></Svg>; }
+export function IconGraduationCap(p) { return <Svg {...p}><path d="M2 9 12 4l10 5-10 5L2 9Z" /><path d="M6 11.5V16c0 1.5 2.5 3 6 3s6-1.5 6-3v-4.5" /><path d="M21 9v6" /></Svg>; }
+
+// Galeria de ícones pra tela de categorias personalizadas — cada categoria
+// nova guarda a CHAVE do ícone escolhido (coluna `icone`), nunca o
+// componente em si; isto aqui é o mapa chave → componente, junto com um
+// rótulo curto pra mostrar na grade de escolha.
+export const GALERIA_ICONES = {
+  estrela: { Icone: IconStar, label: "Estrela" },
+  presente: { Icone: IconGift, label: "Presente" },
+  carrinho: { Icone: IconShoppingCart, label: "Compras" },
+  viagem: { Icone: IconPlane, label: "Viagem" },
+  carro: { Icone: IconCar, label: "Carro" },
+  cafe: { Icone: IconCoffee, label: "Café" },
+  musica: { Icone: IconMusic, label: "Música" },
+  educacao: { Icone: IconGraduationCap, label: "Educação" },
+  dia_a_dia: { Icone: IconBasket, label: "Dia a dia" },
+  recorrentes: { Icone: IconRefresh, label: "Recorrentes" },
+  reserva: { Icone: IconPiggyBank, label: "Reserva" },
+  projetos: { Icone: IconBriefcase, label: "Projetos" },
+  casa: { Icone: IconHouse, label: "Casa" },
+  saude: { Icone: IconHeartHealth, label: "Saúde" },
+  trabalho: { Icone: IconBriefcase2, label: "Trabalho" },
+  livro: { Icone: IconBook, label: "Livro" },
+};
+
 // Mapas chave → ícone, pra emprestar em Gastos.jsx / Receitas.jsx / chips do
 // NovoLancamento.jsx sem theme.js precisar importar JSX (theme.js é mantido
 // de propósito sem importar nada de volta — ver comentário lá em cima dele).

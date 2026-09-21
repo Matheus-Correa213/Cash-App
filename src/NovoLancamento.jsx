@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, FRENTES_GASTO, FONTES_RECEITA, instituicaoDe, moeda, somarMeses } from "./theme.js";
-import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
+import { C, instituicaoDe, moeda, somarMeses } from "./theme.js";
+import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
 // conta/cartão (cores por instituição) e, quando o pagamento é num cartão,
@@ -9,12 +9,19 @@ import { ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, IconCard, IconCash, IconCredit
 // futuras (criar_compra_parcelada no banco) — exatamente o fluxo desenhado
 // no mockup do redesign. Usado tanto pelo dono (com todas as contas/cartões)
 // quanto pelo membro restrito (só com o que foi liberado pra ela).
+//
+// `frentesGasto`/`fontesReceita` (migração 10, categorias personalizadas,
+// 16/09/2026): vêm prontos de OwnerView.jsx, já mesclando as categorias
+// fixas da doutrina financeira (theme.js) com as que a família criou na
+// tela "Categorias" — cada item já chega com um `Icone` (componente,
+// resolvido lá) pra este arquivo não precisar saber a diferença entre uma
+// categoria fixa e uma personalizada.
 
 const PARCELAS_OPCOES = [1, 2, 3, 4, 6, 12];
 
-export default function NovoLancamento({ membroLogado, membros, contas, cartoes, tipoInicial = "gasto", aberto, onAbrir, onFechar, onSalvo }) {
+export default function NovoLancamento({ membroLogado, membros, contas, cartoes, frentesGasto, fontesReceita, tipoInicial = "gasto", aberto, onAbrir, onFechar, onSalvo }) {
   const [tipo, setTipo] = useState(tipoInicial);
-  const [categoria, setCategoria] = useState(tipo === "receita" ? FONTES_RECEITA[0].chave : FRENTES_GASTO[0].chave);
+  const [categoria, setCategoria] = useState(tipo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave);
   const [valor, setValor] = useState("");
   const [descricao, setDescricao] = useState("");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
@@ -25,7 +32,7 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
 
-  const opcoesCategoria = tipo === "receita" ? FONTES_RECEITA : FRENTES_GASTO;
+  const opcoesCategoria = tipo === "receita" ? fontesReceita : frentesGasto;
   const corTipo = tipo === "receita" ? C.green : C.coral;
 
   const [modoPagamento, idPagamento] = pagoCom ? pagoCom.split(":") : [null, null];
@@ -40,7 +47,7 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
 
   function trocarTipo(novo) {
     setTipo(novo);
-    setCategoria(novo === "receita" ? FONTES_RECEITA[0].chave : FRENTES_GASTO[0].chave);
+    setCategoria(novo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave);
     if (novo === "receita") { setPagoCom(""); setParcelas(1); }
   }
 
@@ -119,7 +126,7 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
         <Label>{tipo === "receita" ? "Fonte" : "Frente de gasto"}</Label>
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 6 }}>
           {opcoesCategoria.map((op) => {
-            const IconeOp = (tipo === "receita" ? ICONE_FONTE_RECEITA : ICONE_FRENTE_GASTO)[op.chave];
+            const IconeOp = op.Icone;
             return (
               <ChipToggle key={op.chave} ativo={categoria === op.chave} cor={tipo === "receita" ? C.green : op.cor} onClick={() => setCategoria(op.chave)}>
                 {IconeOp && <IconeOp size={14} color={categoria === op.chave ? "#fff" : C.inkMute} strokeWidth={2} />}

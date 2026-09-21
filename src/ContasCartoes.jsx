@@ -18,14 +18,18 @@ const TIPOS_CONTA = [
   ["outro", "Outro"],
 ];
 
-// podeEditar (16/09/2026, unificação do acesso da Alessia): esta tela agora
-// também aparece pra quem tem acesso restrito (mesmos menus, como pedido) —
-// ela só pode VER as contas/cartões já marcados como visíveis pra ela
-// (isso quem filtra é o RLS, antes mesmo do dado chegar aqui); cadastrar,
-// excluir ou marcar visibilidade continuam só do dono (RLS "contas/cartoes:
-// dono ve e mexe em tudo" barra qualquer tentativa dela no banco — aqui a
-// gente só esconde os botões que iam dar nisso).
-export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCartao }) {
+// 16/09/2026, unificação do acesso da Alessia: esta tela também aparece pra
+// quem tem acesso restrito (mesmos menus, como pedido) — ela só VÊ as
+// contas/cartões já marcados como visíveis pra ela (isso quem filtra é o
+// RLS, antes mesmo do dado chegar aqui).
+//
+// 16/09/2026, migração 10 ("editar tudo"): antes, cadastrar/editar/excluir
+// era só do dono. O Matheus pediu explicitamente pra abrir isso pros dois,
+// sem distinção — então esta tela não esconde mais nenhum desses botões por
+// papel. O RLS (ver migração 10) já garante, do lado do banco, que quem tem
+// acesso restrito só edita/exclui o que ela já enxerga — o que ela não vê,
+// ela nem sabe que existe.
+export default function ContasCartoes({ familiaId, onAbrirCartao }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [saldos, setSaldos] = useState({});
@@ -38,6 +42,11 @@ export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCar
   const [erro, setErro] = useState("");
   const [mostrarFormConta, setMostrarFormConta] = useState(false);
   const [mostrarFormCartao, setMostrarFormCartao] = useState(false);
+  // id da conta sendo editada agora (só uma por vez) — migração 10: antes
+  // não existia NENHUMA forma manual de corrigir nome/titular/saldo de uma
+  // conta já cadastrada (só criar e excluir); isso cobre esse buraco. Pra
+  // cartão, a edição fica na própria tela de detalhe (CartaoDetalhe.jsx).
+  const [editandoContaId, setEditandoContaId] = useState(null);
 
   async function carregar() {
     setCarregando(true); setErro("");
@@ -90,8 +99,18 @@ export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCar
   const saldoFisico = fisico.reduce((s, c) => s + Number(saldos[c.id] ?? c.saldo_inicial), 0);
   const saldoDisponivel = saldoBancarias + saldoFisico;
 
-  function ListaContas(lista, tipoVazio) {
+  function ListaContas(lista) {
     return lista.map((c) => {
+      if (editandoContaId === c.id) {
+        return (
+          <EditarConta
+            key={c.id}
+            conta={c}
+            onSalvo={() => { setEditandoContaId(null); carregar(); }}
+            onCancelar={() => setEditandoContaId(null)}
+          />
+        );
+      }
       const inst = instituicaoDe(c.instituicao || c.nome);
       return (
         <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -100,10 +119,11 @@ export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCar
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{c.nome}</div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{c.titular || "—"} {c.visivel_para_restrito ? "· visível pra ela" : ""}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{c.titular || "—"}</div>
           </div>
           <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{moeda(saldos[c.id] ?? c.saldo_inicial)}</span>
-          {podeEditar && <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>}
+          <button style={btnGhost} onClick={() => setEditandoContaId(c.id)}>editar</button>
+          <button style={btnGhost} onClick={() => excluirConta(c.id)}>excluir</button>
         </div>
       );
     });
@@ -132,15 +152,15 @@ export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCar
         <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCard size={14} color={C.inkFaint} strokeWidth={2} /> Contas bancárias</div>
         {bancarias.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma conta bancária cadastrada ainda.</div>}
         {ListaContas(bancarias)}
-        {podeEditar && !mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta, carteira ou poupança</button>}
-        {podeEditar && mostrarFormConta && <NovaConta familiaId={familiaId} onSalvo={() => { setMostrarFormConta(false); carregar(); }} onCancelar={() => setMostrarFormConta(false)} />}
+        {!mostrarFormConta && <button style={{ ...btnGhost, marginTop: 10 }} onClick={() => setMostrarFormConta(true)}>+ Adicionar conta, carteira ou poupança</button>}
+        {mostrarFormConta && <NovaConta familiaId={familiaId} onSalvo={() => { setMostrarFormConta(false); carregar(); }} onCancelar={() => setMostrarFormConta(false)} />}
       </div>
 
       <div style={cardStyle}>
         <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCash size={14} color={C.inkFaint} strokeWidth={2} /> Dinheiro em espécie</div>
         {fisico.length === 0 && (
           <div style={{ color: C.inkFaint, fontSize: 13.5 }}>
-            {podeEditar ? 'Nenhuma carteira física cadastrada ainda — use "Adicionar conta" acima e escolha o tipo "Carteira/dinheiro".' : "Nenhuma carteira física cadastrada ainda."}
+            Nenhuma carteira física cadastrada ainda — use "Adicionar conta" acima e escolha o tipo "Carteira/dinheiro".
           </div>
         )}
         {ListaContas(fisico)}
@@ -217,8 +237,8 @@ export default function ContasCartoes({ familiaId, podeEditar = true, onAbrirCar
             </button>
           );
         })}
-        {podeEditar && !mostrarFormCartao && <button style={btnGhost} onClick={() => setMostrarFormCartao(true)}>+ Adicionar cartão</button>}
-        {podeEditar && mostrarFormCartao && <NovoCartao familiaId={familiaId} contas={contas} onSalvo={() => { setMostrarFormCartao(false); carregar(); }} onCancelar={() => setMostrarFormCartao(false)} />}
+        {!mostrarFormCartao && <button style={btnGhost} onClick={() => setMostrarFormCartao(true)}>+ Adicionar cartão</button>}
+        {mostrarFormCartao && <NovoCartao familiaId={familiaId} contas={contas} onSalvo={() => { setMostrarFormCartao(false); carregar(); }} onCancelar={() => setMostrarFormCartao(false)} />}
       </div>
     </div>
   );
@@ -272,6 +292,68 @@ function NovaConta({ familiaId, onSalvo, onCancelar }) {
       </label>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Salvar conta"}</button>
+        <button type="button" style={btnGhost} onClick={onCancelar}>Cancelar</button>
+      </div>
+    </form>
+  );
+}
+
+// Edição de uma conta já existente — migração 10 ("editar tudo"): antes só
+// dava pra criar e excluir, nunca corrigir nome/titular/saldo de uma conta
+// já cadastrada. Disponível pros dois papéis, sem distinção.
+function EditarConta({ conta, onSalvo, onCancelar }) {
+  const [nome, setNome] = useState(conta.nome || "");
+  const [tipo, setTipo] = useState(conta.tipo || "corrente");
+  const [instituicao, setInstituicao] = useState(conta.instituicao || "");
+  const [titular, setTitular] = useState(conta.titular || "");
+  const [saldoInicial, setSaldoInicial] = useState(String(conta.saldo_inicial ?? "0"));
+  const [visivel, setVisivel] = useState(!!conta.visivel_para_restrito);
+  const [erro, setErro] = useState("");
+  const [salvando, setSalvando] = useState(false);
+
+  async function salvar(e) {
+    e.preventDefault();
+    setErro(""); setSalvando(true);
+    try {
+      // `.select()` no update, de propósito: o Supabase não avisa quando um
+      // "update" não bate em nenhuma linha (RLS bloqueando aparece como
+      // sucesso com 0 linhas, não como erro) — sem conferir isso, "Salvar"
+      // parecia funcionar sem mudar nada de fato no banco.
+      const { data, error } = await supabase.from("contas").update({
+        nome: nome.trim(), tipo, instituicao: instituicao.trim() || null,
+        titular: titular.trim() || null,
+        saldo_inicial: Number(saldoInicial) || 0, visivel_para_restrito: visivel,
+      }).eq("id", conta.id).select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`A conta "${conta.nome}" não foi atualizada — o banco não confirmou nenhuma alteração.`);
+      onSalvo();
+    } catch (e) {
+      setErro(e.message || "Erro ao salvar.");
+    } finally {
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <form onSubmit={salvar} style={{ padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+      {erro && <div style={{ color: C.danger, fontSize: 13, marginBottom: 8 }}>{erro}</div>}
+      <div style={row}>
+        <input style={input} placeholder="Nome (ex: Nubank)" value={nome} onChange={(e) => setNome(e.target.value)} required />
+        <select style={input} value={tipo} onChange={(e) => setTipo(e.target.value)}>
+          {TIPOS_CONTA.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+      <div style={{ ...row, marginTop: 10 }}>
+        <input style={input} placeholder="Instituição (ex: Nubank, Inter…)" value={instituicao} onChange={(e) => setInstituicao(e.target.value)} />
+        <input style={input} placeholder="Titular (ex: Matheus, Alessia)" value={titular} onChange={(e) => setTitular(e.target.value)} />
+        <input style={input} type="number" step="0.01" placeholder="Saldo inicial" value={saldoInicial} onChange={(e) => setSaldoInicial(e.target.value)} />
+      </div>
+      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13.5, color: C.ink, marginTop: 10 }}>
+        <input type="checkbox" checked={visivel} onChange={(e) => setVisivel(e.target.checked)} />
+        Deixar visível para o membro com acesso restrito
+      </label>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Salvar alterações"}</button>
         <button type="button" style={btnGhost} onClick={onCancelar}>Cancelar</button>
       </div>
     </form>

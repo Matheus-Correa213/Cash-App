@@ -44,7 +44,7 @@ function saudacao() {
   return "Boa noite";
 }
 
-export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, onNavegar, onSalvo, onMembroAtualizado }) {
+export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, frentesGasto, fontesReceita, onNavegar, onSalvo, onMembroAtualizado }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
   const [personalizando, setPersonalizando] = useState(false);
   const podeEditar = membro?.papel === "dono";
@@ -196,7 +196,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
 
       {lancamentoAberto && (
         <NovoLancamento
-          membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes}
+          membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
           aberto={true} onFechar={() => setLancamentoAberto(false)} onSalvo={onSalvo}
         />
       )}

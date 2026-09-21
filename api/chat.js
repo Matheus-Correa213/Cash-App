@@ -22,7 +22,20 @@ import { createClient } from "@supabase/supabase-js";
 
 const MODELO = "claude-sonnet-4-6";
 
-const FERRAMENTAS = [
+// Migração 10 (categorias personalizadas, 16/09/2026): antes a descrição de
+// "categoria" era um texto fixo com as 6 frentes de gasto e 4 fontes de
+// receita da doutrina financeira do COSMO — agora ela é montada por família,
+// incluindo também as categorias que a própria família criou na tela
+// "Categorias" (ver categoriasResumo, mandado pelo ChatCosmo.jsx junto com
+// contasResumo/cartoesResumo).
+function montarFerramentas(categoriasResumo) {
+  const chavesGasto = categoriasResumo?.gasto?.length
+    ? categoriasResumo.gasto.map((c) => c.chave).join(", ")
+    : "dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude";
+  const chavesReceita = categoriasResumo?.receita?.length
+    ? categoriasResumo.receita.map((c) => c.chave).join(", ")
+    : "trabalho, correa_books, freelas, outros";
+  return [
   {
     name: "propor_lancamento",
     description: "Monta uma PROPOSTA de lançamento (gasto ou receita) a partir do que o usuário descreveu ou de uma foto de comprovante. Não grava nada — só propõe, pra pessoa confirmar na tela.",
@@ -30,7 +43,7 @@ const FERRAMENTAS = [
       type: "object",
       properties: {
         tipo: { type: "string", enum: ["gasto", "receita"] },
-        categoria: { type: "string", description: "Para gasto, uma de: dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude. Para receita, uma de: trabalho, correa_books, freelas, outros." },
+        categoria: { type: "string", description: `Para gasto, uma de: ${chavesGasto}. Para receita, uma de: ${chavesReceita}. Essas são as categorias já cadastradas nesta família (fixas + criadas por ela) — use a chave EXATA da lista. Se nada encaixar bem, use a mais próxima; não invente uma chave nova.` },
         valor: { type: "number" },
         descricao: { type: "string" },
         data: { type: "string", description: "Data no formato YYYY-MM-DD. Se não tiver certeza, use a data de hoje." },
@@ -76,15 +89,23 @@ const FERRAMENTAS = [
       },
     },
   },
-];
+  ];
+}
 
-function montarSystemPrompt(contasResumo, cartoesResumo) {
+function montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo) {
   const listaContas = (contasResumo || []).length
     ? (contasResumo || []).map((c) => `- [id: ${c.id}] ${c.nome} (${c.tipo}${c.instituicao ? `, ${c.instituicao}` : ""}${c.titular ? `, de ${c.titular}` : ""})`).join("\n")
     : "(nenhuma conta cadastrada ainda)";
   const listaCartoes = (cartoesResumo || []).length
     ? (cartoesResumo || []).map((k) => `- [id: ${k.id}] ${k.nome} (${k.bandeira || "?"}${k.titular ? `, de ${k.titular}` : ""})`).join("\n")
     : "(nenhum cartão cadastrado ainda)";
+  // categoriasResumo (migração 10, 16/09/2026) já vem mesclando as categorias
+  // fixas da doutrina financeira com as que a própria família criou — só pra
+  // deixar claro no prompt o RÓTULO de cada chave (a ferramenta já lista as
+  // chaves aceitas; isto aqui ajuda o modelo a entender o que cada uma
+  // significa, principalmente as personalizadas).
+  const listaCategoriasGasto = (categoriasResumo?.gasto || []).map((c) => `${c.chave} (${c.label})`).join(", ") || "dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude";
+  const listaCategoriasReceita = (categoriasResumo?.receita || []).map((c) => `${c.chave} (${c.label})`).join(", ") || "trabalho, correa_books, freelas, outros";
 
   return `Você é o COSMO, na sua versão focada em finanças, dentro do app Correa Cash — o app financeiro de um casal (Matheus e Alessia). Seu papel: ajudar a lançar gastos/receitas, ajudar a configurar contas/carteiras/cartões, e responder perguntas sobre as finanças do casal usando dados reais (nunca invente números — use a ferramenta resumo_periodo). Você NUNCA grava nada sozinho — toda ação (lançamento, conta, cartão) é sempre uma PROPOSTA que a pessoa confirma na tela, sem exceção.
 
@@ -93,6 +114,9 @@ ${listaContas}
 
 Cartões de crédito já cadastrados nesta família:
 ${listaCartoes}
+
+Categorias de gasto desta família (fixas + personalizadas): ${listaCategoriasGasto}
+Categorias de receita desta família (fixas + personalizadas): ${listaCategoriasReceita}
 
 Regras importantes:
 - Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Se ele mencionar com qual conta ou cartão pagou (ou for óbvio pelo contexto), inclua também o pago_com_id copiado da lista de contas/cartões acima — sem isso, o app pode não conseguir identificar a conta/cartão certo só pelo nome, e o lançamento fica sem tirar de lugar nenhum. Nunca diga que "já lançou" — apenas proponha.
@@ -118,7 +142,7 @@ export default async function handler(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return res.status(401).json({ error: "Não autenticado." });
 
-  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo } = req.body || {};
+  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo } = req.body || {};
   if (!mensagem && !imagemBase64) return res.status(400).json({ error: "Envie uma mensagem ou uma imagem." });
 
   const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: `Bearer ${token}` } } });
@@ -152,7 +176,8 @@ export default async function handler(req, res) {
 
   const mensagens = [{ role: "user", content: conteudoUsuario }];
 
-  const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo);
+  const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo);
+  const ferramentas = montarFerramentas(categoriasResumo);
   const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao"]);
 
   try {
@@ -168,7 +193,7 @@ export default async function handler(req, res) {
         // devolver MUITAS chamadas de ferramenta em paralelo (uma por item) na
         // mesma resposta. Com um limite baixo, a resposta cortava no meio e
         // sobravam só 1 ou 2 propostas (ou uma incompleta) em vez de todas.
-        body: JSON.stringify({ model: MODELO, max_tokens: 8192, system: systemPrompt, tools: FERRAMENTAS, messages: mensagens }),
+        body: JSON.stringify({ model: MODELO, max_tokens: 8192, system: systemPrompt, tools: ferramentas, messages: mensagens }),
       });
       if (!resp.ok) {
         const detalhe = await resp.text();

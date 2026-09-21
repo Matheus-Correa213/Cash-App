@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C } from "./theme.js";
+import { C, FRENTES_GASTO, FONTES_RECEITA } from "./theme.js";
 import Painel from "./Painel.jsx";
 import Receitas from "./Receitas.jsx";
 import Gastos from "./Gastos.jsx";
@@ -11,7 +11,8 @@ import Relatorios from "./Relatorios.jsx";
 import Assinaturas from "./Assinaturas.jsx";
 import ChatCosmo from "./ChatCosmo.jsx";
 import ImportarArquivo from "./ImportarArquivo.jsx";
-import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers } from "./Icons.jsx";
+import Categorias from "./Categorias.jsx";
+import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers, IconStar, ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, GALERIA_ICONES } from "./Icons.jsx";
 
 const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingBottom: 90 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
@@ -34,12 +35,20 @@ const ABAS_PRINCIPAIS = [
 
 // Correção 16/09/2026 (unificação do acesso da Alessia): este componente
 // era só do dono — agora é a casca inteira do app (Painel/Receitas/Gastos/
-// Mais), compartilhada por qualquer papel. `podeEditar` (= é dono) é o que
-// decide, tela por tela dentro de "Mais", se aparecem os botões de
+// Mais), compartilhada por qualquer papel. `podeEditar` (= é dono) decide,
+// tela por tela dentro de "Mais", se aparecem os botões de
 // cadastrar/editar/excluir/pagar fatura — o dado em si continua vindo do
 // banco já filtrado pelo RLS (RLS é quem decide o que cada um VÊ; isto aqui
 // só decide o que cada um consegue MEXER na interface, pra não deixar
 // ninguém clicar num botão que ia dar erro do banco).
+//
+// Atualização 16/09/2026 (migração 10, "editar tudo"): contas e cartões
+// saíram dessa regra — o Matheus pediu explicitamente que os dois papéis
+// editem/criem/excluam contas e cartões sem distinção, então ContasCartoes
+// e a edição de cartão em CartaoDetalhe não recebem mais `podeEditar` (só
+// "Pagar fatura atual" continua exclusivo do dono, por mexer com dinheiro
+// de verdade). Investimentos, Assinaturas e Membros continuam do jeito que
+// estavam — não fizeram parte do pedido.
 export default function OwnerView({ membro, onMembroAtualizado }) {
   const podeEditar = membro.papel === "dono";
   const [lancamentos, setLancamentos] = useState([]);
@@ -48,6 +57,11 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   const [cartoes, setCartoes] = useState([]);
   const [assinaturas, setAssinaturas] = useState([]);
   const [investimentos, setInvestimentos] = useState([]);
+  // Categorias personalizadas (migração 10, 16/09/2026) — criadas pela
+  // própria família na tela "Categorias", somadas às fixas da doutrina
+  // financeira (FRENTES_GASTO/FONTES_RECEITA) logo abaixo, em frentesGasto/
+  // fontesReceita.
+  const [categorias, setCategorias] = useState([]);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [aba, setAba] = useState("painel");
@@ -65,13 +79,14 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     if (!silencioso) setCarregando(true);
     setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
         supabase.from("cartoes_credito").select("*").eq("familia_id", membro.familia_id).order("nome"),
         supabase.from("assinaturas").select("*").eq("familia_id", membro.familia_id).order("dia_cobranca"),
         supabase.from("investimentos").select("*").eq("familia_id", membro.familia_id),
+        supabase.from("categorias").select("*").eq("familia_id", membro.familia_id).order("created_at"),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -79,12 +94,18 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       if (e4) throw e4;
       if (e5) throw e5;
       if (e6) throw e6;
+      // categorias (migração 10) é uma tabela nova — se o banco do Matheus
+      // ainda não rodou essa migração, e7 vem preenchido (tabela não existe);
+      // em vez de travar o app inteiro (as categorias fixas continuam
+      // funcionando sem essa tabela), só loga e segue com a lista vazia.
+      if (e7) console.error("Não consegui carregar categorias personalizadas (rodou a migração 10?):", e7.message);
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
       setCartoes(crt || []);
       setAssinaturas(assn || []);
       setInvestimentos(inv || []);
+      setCategorias(cats || []);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
@@ -95,6 +116,33 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   useEffect(() => { carregarTudo(); }, []);
 
   const nomePorMembroId = useMemo(() => Object.fromEntries(membros.map((m) => [m.id, m.nome])), [membros]);
+
+  // frentesGasto/fontesReceita (migração 10, categorias personalizadas,
+  // 16/09/2026): mescla as categorias FIXAS da doutrina financeira do COSMO
+  // (theme.js) com as que a própria família criou (tabela `categorias`) —
+  // cada item já sai com um `Icone` (componente React) resolvido, pra quem
+  // usa essas listas (Gastos/Receitas/NovoLancamento/ImportarArquivo/
+  // ChatCosmo) nunca precisar saber a diferença entre uma fixa e uma
+  // personalizada.
+  const frentesGasto = useMemo(() => {
+    const fixas = FRENTES_GASTO.map((f) => ({ ...f, Icone: ICONE_FRENTE_GASTO[f.chave] || IconStar, personalizada: false }));
+    const extras = categorias.filter((c) => c.tipo === "gasto").map((c) => ({
+      chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft, corTexto: c.cor,
+      Icone: (GALERIA_ICONES[c.icone] || GALERIA_ICONES.estrela).Icone,
+      personalizada: true, id: c.id,
+    }));
+    return [...fixas, ...extras];
+  }, [categorias]);
+
+  const fontesReceita = useMemo(() => {
+    const fixas = FONTES_RECEITA.map((f) => ({ ...f, Icone: ICONE_FONTE_RECEITA[f.chave] || IconStar, personalizada: false }));
+    const extras = categorias.filter((c) => c.tipo === "receita").map((c) => ({
+      chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft,
+      Icone: (GALERIA_ICONES[c.icone] || GALERIA_ICONES.estrela).Icone,
+      personalizada: true, id: c.id,
+    }));
+    return [...fixas, ...extras];
+  }, [categorias]);
 
   // O seletor "lançar em nome de outro membro" (dentro de NovoLancamento) só
   // faz sentido pro dono — a política de RLS de INSERT em "lancamentos" só
@@ -128,23 +176,25 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
           {aba === "painel" && (
             <Painel
               membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
+              frentesGasto={frentesGasto} fontesReceita={fontesReceita}
               onNavegar={irPara} onSalvo={() => carregarTudo({ silencioso: true })}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
             />
           )}
 
           {aba === "receitas" && (
-            <Receitas membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Receitas membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "gastos" && (
-            <Gastos membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Gastos membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "mais" && (
             <TelaMais
               tela={tela} setTela={setTela}
-              membro={membro} membros={membros} contas={contas} cartoes={cartoes} podeEditar={podeEditar}
+              membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
+              frentesGasto={frentesGasto} fontesReceita={fontesReceita}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
             />
@@ -157,21 +207,25 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, podeEditar, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
-    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
+    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} contas={contas} podeEditar={podeEditar} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
   }
-  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} podeEditar={podeEditar} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
+  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} />;
   if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} />;
-  if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} />;
+  if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} frentesGasto={frentesGasto} />;
   if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
-  if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
-  if (tela === "importar") return <ImportarArquivo membro={membro} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
+  if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
+  if (tela === "importar") return <ImportarArquivo membro={membro} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
+  // Categorias personalizadas (migração 10, 16/09/2026) — disponível pros
+  // dois papéis, sem distinção, por isso não recebe `podeEditar` nenhum.
+  if (tela === "categorias") return <Categorias familiaId={membro.familia_id} categorias={categorias} onAtualizado={onSalvo} onVoltar={() => setTela(null)} />;
 
   const itens = [
     { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "categorias", label: "Categorias", Icone: IconStar, cor: C.gold, corSoft: C.amberSoft },
     { chave: "assinaturas", label: "Assinaturas", Icone: IconRefresh, cor: C.purple, corSoft: C.purpleSoft },
     { chave: "investimentos", label: "Investimentos", Icone: IconTrendingUp, cor: C.green, corSoft: C.greenSoft },
     { chave: "relatorios", label: "Relatórios", Icone: IconBarChart, cor: C.accent, corSoft: C.accentSoft },

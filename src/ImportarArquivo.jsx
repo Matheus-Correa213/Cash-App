@@ -1,12 +1,18 @@
 import React, { useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, frenteDe, FONTES_RECEITA, moeda } from "./theme.js";
+import { C, moeda } from "./theme.js";
 import { IconUpload } from "./Icons.jsx";
 
 // Importar e anexar — lê PDF/Word/foto e propõe lançamentos pra revisão.
 // Mesmo princípio do chat: o COSMO nunca lança nada de arquivo sozinho.
+//
+// `frentesGasto`/`fontesReceita` (migração 10, categorias personalizadas,
+// 16/09/2026): mescladas (fixas + criadas pela família) de OwnerView.jsx —
+// usadas aqui só pra mostrar o rótulo certo de cada proposta encontrada; a
+// própria extração (api/extrair-arquivo.js) também recebe essas categorias,
+// pra poder propor usando as personalizadas quando fizer sentido.
 
-export default function ImportarArquivo({ membro, onVoltar, onSalvo }) {
+export default function ImportarArquivo({ membro, frentesGasto, fontesReceita, onVoltar, onSalvo }) {
   const inputRef = useRef(null);
   const [nomeArquivo, setNomeArquivo] = useState("");
   const [processando, setProcessando] = useState(false);
@@ -29,10 +35,14 @@ export default function ImportarArquivo({ membro, onVoltar, onSalvo }) {
         leitor.readAsDataURL(arquivo);
       });
       const { data: { session } } = await supabase.auth.getSession();
+      const categoriasResumo = {
+        gasto: frentesGasto.map((f) => ({ chave: f.chave, label: f.label })),
+        receita: fontesReceita.map((f) => ({ chave: f.chave, label: f.label })),
+      };
       const resp = await fetch("/api/extrair-arquivo", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ nomeArquivo: arquivo.name, mimeType: arquivo.type, base64 }),
+        body: JSON.stringify({ nomeArquivo: arquivo.name, mimeType: arquivo.type, base64, categoriasResumo }),
       });
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao processar arquivo.");
@@ -106,7 +116,7 @@ export default function ImportarArquivo({ membro, onVoltar, onSalvo }) {
           {propostas.length > 0 && <div style={{ fontSize: 12, fontWeight: 700, color: C.ink }}>{propostas.length} lançamento{propostas.length === 1 ? "" : "s"} encontrado{propostas.length === 1 ? "" : "s"} — confira antes de adicionar:</div>}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {propostas.map((p, i) => {
-              const info = p.tipo === "receita" ? FONTES_RECEITA.find((f) => f.chave === p.categoria) : frenteDe(p.categoria);
+              const info = (p.tipo === "receita" ? fontesReceita : frentesGasto).find((f) => f.chave === p.categoria);
               return (
                 <label key={i} style={{ display: "flex", alignItems: "center", gap: 10, background: C.bg, borderRadius: 12, padding: "10px 12px", cursor: "pointer" }}>
                   <input type="checkbox" checked={p.selecionado} onChange={() => alternar(i)} />

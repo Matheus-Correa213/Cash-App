@@ -1,14 +1,20 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, fonteDe, moeda, inicioMesISO } from "./theme.js";
+import { C, moeda, inicioMesISO } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
-import { ICONE_FONTE_RECEITA } from "./Icons.jsx";
 
 // Tela dedicada de Receitas — espaço próprio, como pedido no redesign, em vez
 // de ficar escondida dentro de um formulário genérico de lançamento.
+//
+// `fontesReceita`/`frentesGasto` (migração 10, categorias personalizadas,
+// 16/09/2026): vêm mescladas (fixas + criadas pela família) de OwnerView.jsx.
 
-export default function Receitas({ membro, membros, lancamentos, contas, cartoes, nomePorMembroId, onSalvo }) {
+export default function Receitas({ membro, membros, lancamentos, contas, cartoes, frentesGasto, fontesReceita, nomePorMembroId, onSalvo }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
+
+  function fonteDe(categoria) {
+    return fontesReceita.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line, Icone: null };
+  }
 
   const doMes = useMemo(() => lancamentos.filter((l) => l.tipo === "receita" && l.data >= inicioMesISO()), [lancamentos]);
   const total = useMemo(() => doMes.reduce((s, l) => s + Number(l.valor), 0), [doMes]);
@@ -34,7 +40,7 @@ export default function Receitas({ membro, membros, lancamentos, contas, cartoes
       </div>
 
       <NovoLancamento
-        membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} tipoInicial="receita"
+        membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} tipoInicial="receita"
         aberto={lancamentoAberto} onAbrir={() => setLancamentoAberto(true)} onFechar={() => setLancamentoAberto(false)} onSalvo={onSalvo}
       />
 
@@ -44,7 +50,7 @@ export default function Receitas({ membro, membros, lancamentos, contas, cartoes
           <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: "6px 14px" }}>
             {porFonte.map(([chave, valor]) => {
               const f = fonteDe(chave);
-              const Icone = ICONE_FONTE_RECEITA[chave];
+              const Icone = f.Icone;
               return (
                 <div key={chave} style={{ display: "flex", alignItems: "center", gap: 12, padding: "13px 0", borderBottom: `1px solid ${C.line}` }}>
                   <div style={{ width: 36, height: 36, borderRadius: 11, background: f.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -70,7 +76,7 @@ export default function Receitas({ membro, membros, lancamentos, contas, cartoes
           {doMes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, padding: "14px 0" }}>Nenhuma receita lançada este mês ainda.</div>}
           {doMes.map((l) => {
             const f = fonteDe(l.categoria);
-            const Icone = ICONE_FONTE_RECEITA[l.categoria];
+            const Icone = f.Icone;
             // Quem tem acesso restrito só exclui os PRÓPRIOS lançamentos — a
             // mesma regra que a RLS já aplica no DELETE ("membro exclui so o
             // proprio"); escondemos o botão nos lançamentos de outra pessoa

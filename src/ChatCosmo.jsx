@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, FRENTES_GASTO, FONTES_RECEITA, frenteDe, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
+import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
@@ -19,7 +19,13 @@ import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Ico
 const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?"];
 const SAUDACAO = "Oi! Posso lançar gastos e receitas, ler comprovantes, ajudar a cadastrar/atualizar contas e cartões, e te dar um resumo rápido. É só me mandar uma mensagem ou uma foto.";
 
-export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }) {
+// `frentesGasto`/`fontesReceita` (migração 10, categorias personalizadas,
+// 16/09/2026): mescladas (fixas + criadas pela família) de OwnerView.jsx —
+// usadas aqui pra mostrar o rótulo certo no card de proposta E enviadas
+// pro /api/chat como `categoriasResumo`, pra o COSMO poder propor
+// lançamentos usando as categorias personalizadas também, não só as 6+4
+// fixas da doutrina financeira.
+export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fontesReceita, onVoltar, onSalvo }) {
   const [mensagens, setMensagens] = useState([]);
   const [carregandoHistorico, setCarregandoHistorico] = useState(true);
   const [texto, setTexto] = useState("");
@@ -110,10 +116,14 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
       // ATUALIZAR) ou é nova (pra CRIAR), sem precisar de outra ida ao banco.
       const contasResumo = contas.map((c) => ({ id: c.id, nome: c.nome, tipo: c.tipo, instituicao: c.instituicao, titular: c.titular }));
       const cartoesResumo = cartoes.map((k) => ({ id: k.id, nome: k.nome, bandeira: k.bandeira, titular: k.titular }));
+      const categoriasResumo = {
+        gasto: frentesGasto.map((f) => ({ chave: f.chave, label: f.label })),
+        receita: fontesReceita.map((f) => ({ chave: f.chave, label: f.label })),
+      };
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo }),
+        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo }),
       });
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao falar com o COSMO.");
@@ -242,10 +252,13 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
     return { total: base + totalCicloAtual, idsCicloAtual: doCicloAtual.map((l) => l.id) };
   }
 
-  // Só o dono consegue de fato gravar em contas/cartoes_credito (RLS "dono ve
-  // e mexe em tudo") — pra Alessia essa proposta chegaria a dar erro aqui, o
-  // que é o comportamento certo, já que só o dono mexe em contas/cartões em
-  // qualquer outro lugar do app também.
+  // Migração 10 ("editar tudo", 16/09/2026): antes só o dono gravava de fato
+  // em contas/cartoes_credito (RLS "dono ve e mexe em tudo") — pra Alessia
+  // essa proposta dava erro aqui de propósito. Isso mudou a pedido do
+  // Matheus: hoje os dois papéis gravam, dentro do que cada um já enxerga
+  // (RLS "familia pode editar/criar/excluir conforme visibilidade") — quem
+  // tem acesso restrito só mexe no que já está marcado como visível pra
+  // ela, igual em qualquer outro lugar do app.
   async function confirmarContaOuCartao(dados) {
     const acao = dados.acao;
     if (acao === "criar_conta") {
@@ -473,6 +486,7 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
           <Bolha
             key={m.dbId || i}
             mensagem={m}
+            frentesGasto={frentesGasto} fontesReceita={fontesReceita}
             onConfirmar={(indiceProposta, proposta) => confirmarItem(i, m.dbId, indiceProposta, proposta, m.confirmadas)}
             onConfirmarTodas={() => confirmarTodas(i, m.dbId, m.propostas, m.confirmadas)}
           />
@@ -504,7 +518,7 @@ export default function ChatCosmo({ membro, contas, cartoes, onVoltar, onSalvo }
   );
 }
 
-function Bolha({ mensagem, onConfirmar, onConfirmarTodas }) {
+function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmarTodas }) {
   const deUsuario = mensagem.autor === "usuario";
   const propostas = mensagem.propostas || [];
   const pendentes = propostas.filter((_, idx) => !mensagem.confirmadas?.[idx]).length;
@@ -538,7 +552,7 @@ function Bolha({ mensagem, onConfirmar, onConfirmarTodas }) {
             return <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {texto}</div>;
           }
           return proposta.natureza === "lancamento"
-            ? <CardProposta key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />
+            ? <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />
             : <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
         })}
         {propostas.length > 1 && pendentes === 0 && (
@@ -551,8 +565,8 @@ function Bolha({ mensagem, onConfirmar, onConfirmarTodas }) {
   );
 }
 
-function CardProposta({ dados, onConfirmar }) {
-  const info = dados.tipo === "receita" ? FONTES_RECEITA.find((f) => f.chave === dados.categoria) : frenteDe(dados.categoria);
+function CardProposta({ dados, frentesGasto, fontesReceita, onConfirmar }) {
+  const info = (dados.tipo === "receita" ? fontesReceita : frentesGasto).find((f) => f.chave === dados.categoria);
   const cor = dados.tipo === "receita" ? C.green : C.coral;
   return (
     <div style={{ background: "#fff", border: `1.5px solid ${C.accentSoft}`, borderRadius: 16, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>

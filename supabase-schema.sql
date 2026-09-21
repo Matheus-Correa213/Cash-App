@@ -398,23 +398,85 @@ alter table contas enable row level security;
 alter table cartoes_credito enable row level security;
 alter table investimentos enable row level security;
 
-create policy "contas: dono ve e mexe em tudo" on contas
-  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
-  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+-- contas / cartoes_credito — ver migração 10 ("editar tudo", 16/09/2026):
+-- antes só o dono editava, restrito só via as marcadas como visíveis. Agora
+-- os dois editam (inserem/atualizam/excluem), dentro do que já é visível
+-- pra cada um — a VISIBILIDADE (visivel_para_restrito) continua igual, só a
+-- permissão de EDITAR deixou de ser exclusiva do dono.
+create policy "contas: familia ve conforme visibilidade" on contas
+  for select using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
 
-create policy "contas: membro ve as marcadas como visiveis" on contas
-  for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
+create policy "contas: familia pode criar" on contas
+  for insert with check (familia_id = minha_familia_id());
 
-create policy "cartoes: dono ve e mexe em tudo" on cartoes_credito
-  for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
-  with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+create policy "contas: familia pode editar conforme visibilidade" on contas
+  for update using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
 
-create policy "cartoes: membro ve os marcados como visiveis" on cartoes_credito
-  for select using (familia_id = minha_familia_id() and visivel_para_restrito = true);
+create policy "contas: familia pode excluir conforme visibilidade" on contas
+  for delete using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
+
+create policy "cartoes: familia ve conforme visibilidade" on cartoes_credito
+  for select using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
+
+create policy "cartoes: familia pode criar" on cartoes_credito
+  for insert with check (familia_id = minha_familia_id());
+
+create policy "cartoes: familia pode editar conforme visibilidade" on cartoes_credito
+  for update using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
+
+create policy "cartoes: familia pode excluir conforme visibilidade" on cartoes_credito
+  for delete using (
+    familia_id = minha_familia_id()
+    and (meu_papel() = 'dono' or visivel_para_restrito = true)
+  );
+
+-- "Pagar fatura atual" continua só do dono — é uma ação de movimentar
+-- dinheiro (pagar_fatura_cartao já recusa quem não é dono, ver migração 6),
+-- diferente de editar o CADASTRO da conta/cartão, que agora é liberado.
 
 create policy "investimentos: so o dono ve e mexe" on investimentos
   for all using (familia_id = minha_familia_id() and meu_papel() = 'dono')
   with check (familia_id = minha_familia_id() and meu_papel() = 'dono');
+
+-- categorias — migração 10 (16/09/2026): as 6 frentes de gasto e 4 fontes de
+-- receita da doutrina financeira do COSMO (theme.js) continuam fixas — esta
+-- tabela é pra CATEGORIAS EXTRAS que a própria família cria (nome + cor +
+-- ícone), somadas às fixas em todo lugar que usa categoria.
+create table if not exists categorias (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  tipo text not null check (tipo in ('gasto', 'receita')),
+  chave text not null,
+  label text not null,
+  cor text not null default '#0469FB',
+  cor_soft text not null default '#E7F0FE',
+  icone text not null default 'estrela',
+  created_at timestamptz not null default now(),
+  unique (familia_id, tipo, chave)
+);
+
+alter table categorias enable row level security;
+
+create policy "categorias: familia ve e mexe" on categorias
+  for all using (familia_id = minha_familia_id())
+  with check (familia_id = minha_familia_id());
+
+grant select, insert, update, delete on categorias to authenticated;
 
 -- saldos_contas() — ampliado na migração 9 (unificação do acesso da
 -- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido
@@ -424,7 +486,7 @@ create policy "investimentos: so o dono ve e mexe" on investimentos
 -- real só das contas JÁ marcadas como visíveis pra ela
 -- (visivel_para_restrito = true) — nenhuma conta nova fica exposta, é a
 -- mesma regra que a tabela "contas" já aplica no SELECT direto (ver a
--- política "contas: membro ve as marcadas como visiveis").
+-- política "contas: familia ve conforme visibilidade", migração 10).
 create or replace function saldos_contas()
 returns table(conta_id uuid, saldo numeric)
 language sql security definer stable
