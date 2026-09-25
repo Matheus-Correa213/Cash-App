@@ -44,13 +44,17 @@ function saudacao() {
   return "Boa noite";
 }
 
-export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, frentesGasto, fontesReceita, onNavegar, onSalvo, onMembroAtualizado }) {
+export default function Painel({ membro, membros, lancamentos, contas, cartoes, assinaturas, investimentos, frentesGasto, fontesReceita, categorizacaoAutomatica, onNavegar, onSalvo, onMembroAtualizado }) {
   const [lancamentoAberto, setLancamentoAberto] = useState(false);
   const [personalizando, setPersonalizando] = useState(false);
   const podeEditar = membro?.papel === "dono";
 
   const doMes = useMemo(() => lancamentos.filter((l) => l.data >= inicioMesISO()), [lancamentos]);
-  const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
+  // `!l.cartao_id` nos gastos (leva 12, 25/09/2026 — mesma separação usada em
+  // Gastos.jsx): compra de cartão só vira dinheiro saindo de verdade quando a
+  // fatura é paga (esse lançamento não tem `cartao_id`), então contar as
+  // compras E a fatura ao mesmo tempo contaria o mesmo gasto duas vezes.
+  const totalGastos = useMemo(() => doMes.filter((l) => l.tipo === "gasto" && !l.cartao_id).reduce((s, l) => s + Number(l.valor), 0), [doMes]);
   const totalReceitas = useMemo(() => doMes.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0), [doMes]);
 
   // BUG CORRIGIDO (16/09/2026): "Saldo total do casal" estava sendo calculado
@@ -156,7 +160,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
     const seteDiasAtras = new Date(hoje); seteDiasAtras.setDate(hoje.getDate() - 7);
     const quatorzeDiasAtras = new Date(hoje); quatorzeDiasAtras.setDate(hoje.getDate() - 14);
     const soma = (de, ate) => lancamentos
-      .filter((l) => l.tipo === "gasto" && l.categoria === "dia_a_dia" && l.data >= de.toISOString().slice(0, 10) && l.data < ate.toISOString().slice(0, 10))
+      .filter((l) => l.tipo === "gasto" && !l.cartao_id && l.categoria === "dia_a_dia" && l.data >= de.toISOString().slice(0, 10) && l.data < ate.toISOString().slice(0, 10))
       .reduce((s, l) => s + Number(l.valor), 0);
     const ultimos = soma(seteDiasAtras, amanha);
     const anteriores = soma(quatorzeDiasAtras, seteDiasAtras);
@@ -210,6 +214,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
       {lancamentoAberto && (
         <NovoLancamento
           membroLogado={membro} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+          categorizacaoAutomatica={categorizacaoAutomatica}
           aberto={true} onFechar={() => setLancamentoAberto(false)} onSalvo={onSalvo}
         />
       )}

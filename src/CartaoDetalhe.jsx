@@ -2,14 +2,23 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import LogoInstituicao from "./LogoInstituicao.jsx";
+import EditarLancamento from "./EditarLancamento.jsx";
 
-// Detalhe de um cartão — visão estilo app de banco: anel de limite, fatura
-// atual itemizada com o tipo de cada compra (à vista / parcela / assinatura)
-// e uma prévia dos próximos meses, calculada só somando as parcelas que já
-// foram lançadas com a data certa (nenhuma mágica: a matemática já foi feita
-// na hora da compra, em criar_compra_parcelada).
+// Detalhe de um cartão — visão estilo app de banco: anel de limite, e a
+// fatura de um mês por vez, com setas pra folhear os meses (só os que têm
+// parcela em aberto — nenhuma mágica: a matemática já foi feita na hora da
+// compra, em criar_compra_parcelada).
+//
+// Leva 12 (25/09/2026) — pedido do Matheus: "Separar gastos de dinheiro em
+// conta, com cartão... as parcelas do cartão ficam dentro da aba do cartão,
+// e cada parcela em seu mês. Como app de banco." Antes só existia "fatura
+// atual itemizada" + "prévia dos próximos 3 meses só com o total" — agora dá
+// pra folhear qualquer mês (passado ou futuro) que tenha parcela em aberto e
+// ver a lista completa, não só o total. Também ganhou o botão "editar" em
+// cada parcela (reaproveitando EditarLancamento.jsx, o mesmo usado em
+// Gastos/Receitas).
 
-export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEditar = true, onVoltar, onSalvo }) {
+export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, contas = [], cartoes = [], frentesGasto = [], fontesReceita = [], podeEditar = true, onVoltar, onSalvo }) {
   const [cartao, setCartao] = useState(null);
   const [lancamentosAbertos, setLancamentosAbertos] = useState([]);
   const [carregando, setCarregando] = useState(true);
@@ -20,6 +29,11 @@ export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEd
   // papéis, sem distinção (diferente de "Pagar fatura atual", que continua
   // só do dono).
   const [editando, setEditando] = useState(false);
+  // Qual mês da fatura está sendo folheado agora — null enquanto não foi
+  // tocado ainda, o que faz o mês corrente (mesAtual, calculado mais abaixo)
+  // ser o ponto de partida sempre que o cartão muda.
+  const [mesEscolhido, setMesEscolhido] = useState(null);
+  const [editandoLancamentoId, setEditandoLancamentoId] = useState(null);
 
   async function carregar() {
     setCarregando(true); setErro("");
@@ -39,7 +53,7 @@ export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEd
     }
   }
 
-  useEffect(() => { carregar(); }, [cartaoId]);
+  useEffect(() => { carregar(); setMesEscolhido(null); setEditandoLancamentoId(null); }, [cartaoId]);
 
   const hojeMes = new Date().toISOString().slice(0, 7);
   const porMesFatura = useMemo(() => {
@@ -53,13 +67,22 @@ export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEd
 
   const mesesOrdenados = Object.keys(porMesFatura).sort();
   const mesAtual = mesesOrdenados.find((m) => m >= hojeMes) || hojeMes;
-  const itensFaturaAtual = porMesFatura[mesAtual] || [];
+  // Folheia só entre meses que TÊM parcela em aberto (mesesOrdenados) — um
+  // seletor livre de mês/ano não faria sentido aqui, já que as parcelas de
+  // uma compra são todas criadas de uma vez, na hora da compra
+  // (criar_compra_parcelada): não existe "fatura de março" pra ver se nada
+  // foi comprado/parcelado até março.
+  const mesAtivo = mesEscolhido && mesesOrdenados.includes(mesEscolhido) ? mesEscolhido : mesAtual;
+  const idxAtivo = mesesOrdenados.indexOf(mesAtivo);
+  const itensFaturaAtiva = porMesFatura[mesAtivo] || [];
   // fatura_inicial (migração 6) é a dívida que já existia no cartão antes de
-  // começar a lançar tudo pelo app — entra na fatura ATUAL (é dívida já
-  // vencida/a vencer agora, não uma parcela futura), e some sozinha quando a
-  // fatura é paga pelo app (a RPC pagar_fatura_cartao zera ela junto).
-  const totalFaturaAtual = itensFaturaAtual.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao?.fatura_inicial || 0);
-  const proximosMeses = mesesOrdenados.filter((m) => m > mesAtual).slice(0, 3);
+  // começar a lançar tudo pelo app — entra só na fatura ATUAL (é dívida já
+  // vencida/a vencer agora, não uma parcela futura nem passada), e some
+  // sozinha quando a fatura é paga pelo app (a RPC pagar_fatura_cartao zera
+  // ela junto).
+  const totalFaturaAtiva = itensFaturaAtiva.reduce((s, l) => s + Number(l.valor), 0) + (mesAtivo === mesAtual ? Number(cartao?.fatura_inicial || 0) : 0);
+  const [anoAtivo, mesNumAtivo] = mesAtivo.split("-");
+  const nomeMesAtivo = new Date(Number(anoAtivo), Number(mesNumAtivo) - 1, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 
   // limite_comprometido_extra (migração 7): compras parceladas em andamento
   // que o app ainda não conhece lançamento por lançamento — consomem limite
@@ -70,7 +93,7 @@ export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEd
   const pctUsado = cartao?.limite ? Math.min(100, Math.round((usado / cartao.limite) * 100)) : 0;
 
   async function pagarFaturaAtual() {
-    if (!confirm(`Marcar a fatura de ${cartao.nome} (${moeda(totalFaturaAtual)}) como paga?`)) return;
+    if (!confirm(`Marcar a fatura de ${cartao.nome} (${moeda(totalFaturaAtiva)}) como paga?`)) return;
     try {
       const { error } = await supabase.rpc("pagar_fatura_cartao", { p_cartao_id: cartao.id });
       if (error) throw error;
@@ -132,52 +155,76 @@ export default function CartaoDetalhe({ cartaoId, familiaId, contas = [], podeEd
       )}
 
       <div>
-        <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, marginBottom: 10 }}>Fatura atual — {moeda(totalFaturaAtual)}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <button
+            type="button" onClick={() => setMesEscolhido(mesesOrdenados[idxAtivo - 1])} disabled={idxAtivo <= 0}
+            style={setaFatura(idxAtivo <= 0)}
+          >‹</button>
+          <div style={{ textAlign: "center" }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink, textTransform: "capitalize" }}>{nomeMesAtivo}{mesAtivo === mesAtual ? " · atual" : ""}</div>
+            <div style={{ fontSize: 15, fontWeight: 800, color: mesAtivo === mesAtual ? C.ink : "#8A05BE" }}>{moeda(totalFaturaAtiva)}</div>
+          </div>
+          <button
+            type="button" onClick={() => setMesEscolhido(mesesOrdenados[idxAtivo + 1])} disabled={idxAtivo >= mesesOrdenados.length - 1}
+            style={setaFatura(idxAtivo >= mesesOrdenados.length - 1)}
+          >›</button>
+        </div>
         <div style={{ background: C.card, borderRadius: 16, padding: "4px 14px" }}>
-          {itensFaturaAtual.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13, padding: "14px 0" }}>Nenhuma compra em aberto neste ciclo.</div>}
-          {itensFaturaAtual.map((l) => (
-            <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{l.descricao || l.categoria}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{l.data}</div>
+          {itensFaturaAtiva.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13, padding: "14px 0" }}>Nenhuma compra em aberto neste ciclo.</div>}
+          {itensFaturaAtiva.map((l) => {
+            if (editandoLancamentoId === l.id) {
+              return (
+                <div key={l.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+                  <EditarLancamento
+                    lancamento={l} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+                    podeEscolherMembro={podeEditar}
+                    onSalvo={() => { setEditandoLancamentoId(null); carregar(); onSalvo && onSalvo(); }}
+                    onCancelar={() => setEditandoLancamentoId(null)}
+                  />
+                </div>
+              );
+            }
+            // Quem tem acesso restrito só edita a PRÓPRIA parcela — mesma
+            // regra de RLS já aplicada em Gastos/Receitas.
+            const podeMexer = podeEditar || l.membro_id === membro?.id;
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{l.descricao || l.categoria}</div>
+                  <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{l.data}</div>
+                </div>
+                <BadgeTipo lancamento={l} />
+                <span style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{moeda(l.valor)}</span>
+                {podeMexer && (
+                  <button onClick={() => setEditandoLancamentoId(l.id)} style={{ border: "none", background: "transparent", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>editar</button>
+                )}
               </div>
-              <BadgeTipo lancamento={l} />
-              <span style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{moeda(l.valor)}</span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {proximosMeses.length > 0 && (
-        <div>
-          <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Prévia das próximas faturas</div>
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 2, marginBottom: 10 }}>Calculada a partir das parcelas em aberto — nada aqui é surpresa.</div>
-          <div style={{ display: "grid", gridTemplateColumns: `repeat(${proximosMeses.length}, 1fr)`, gap: 10 }}>
-            {proximosMeses.map((mes) => {
-              const total = (porMesFatura[mes] || []).reduce((s, l) => s + Number(l.valor), 0);
-              const [ano, mesNum] = mes.split("-");
-              const nomeMes = new Date(Number(ano), Number(mesNum) - 1, 1).toLocaleDateString("pt-BR", { month: "long" });
-              return (
-                <div key={mes} style={{ background: "#FDF3FF", borderRadius: 14, padding: "14px 10px", textAlign: "center" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: "#8A05BE", textTransform: "capitalize" }}>{nomeMes}</div>
-                  <div style={{ fontSize: 15, fontWeight: 800, marginTop: 4 }}>{moeda(total)}</div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* pagar_fatura_cartao() já recusa quem não é dono direto no banco
           ("Só o administrador pode pagar faturas.") — o botão só fica
-          escondido aqui pra não levar a esse erro cru. */}
-      {podeEditar && totalFaturaAtual > 0 && (
+          escondido aqui pra não levar a esse erro cru. Só aparece na fatura
+          ATUAL de propósito: pagar uma fatura futura antes da hora, ou uma
+          antiga que já devia ter sido paga, não é o fluxo que esse botão
+          representa. */}
+      {podeEditar && mesAtivo === mesAtual && totalFaturaAtiva > 0 && (
         <button onClick={pagarFaturaAtual} style={{ background: inst.cor, borderRadius: 16, padding: "16px 0", border: "none", color: "#fff", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>
           Pagar fatura atual
         </button>
       )}
     </div>
   );
+}
+
+function setaFatura(desativada) {
+  return {
+    width: 32, height: 32, borderRadius: 10, border: `1px solid ${C.line}`, background: desativada ? C.bg : "#fff",
+    color: desativada ? C.inkFaint : C.ink, fontSize: 16, fontWeight: 700, cursor: desativada ? "default" : "pointer",
+    opacity: desativada ? 0.5 : 1,
+  };
 }
 
 const inputEdit = { flex: "1 1 120px", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 14 };

@@ -12,7 +12,8 @@ import Assinaturas from "./Assinaturas.jsx";
 import ChatCosmo from "./ChatCosmo.jsx";
 import ImportarArquivo from "./ImportarArquivo.jsx";
 import Categorias from "./Categorias.jsx";
-import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers, IconStar, ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, GALERIA_ICONES } from "./Icons.jsx";
+import Planejamento from "./Planejamento.jsx";
+import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers, IconStar, IconCalendar, ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, resolverIconeCategoria } from "./Icons.jsx";
 
 const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingBottom: 90 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
@@ -62,10 +63,26 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // financeira (FRENTES_GASTO/FONTES_RECEITA) logo abaixo, em frentesGasto/
   // fontesReceita.
   const [categorias, setCategorias] = useState([]);
+  // Planejamento financeiro (migração 12, 25/09/2026) — "lembrete de
+  // boletos" pedido pelo Matheus, ver Planejamento.jsx pro raciocínio
+  // completo de como o "pago" é calculado (nunca gravado).
+  const [planejamentoItens, setPlanejamentoItens] = useState([]);
+  // Categorização automática pelo COSMO (migração 12, 25/09/2026) — o
+  // registro da própria família (só a coluna categorizacao_automatica
+  // interessa aqui; RLS de UPDATE em "familias" já é dono-only, então o
+  // toggle em Categorias.jsx só aparece pra quem pode mesmo mudar isso).
+  const [familiaInfo, setFamiliaInfo] = useState(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
   const [aba, setAba] = useState("painel");
-  const [tela, setTela] = useState(null); // ex: "contas" | "cartao:<id>" | "investimentos" | "relatorios" | "assinaturas" | "chat" | "importar" | "membros"
+  const [tela, setTela] = useState(null); // ex: "contas" | "cartao:<id>" | "investimentos" | "relatorios" | "assinaturas" | "chat" | "importar" | "membros" | "categorias" | "planejamento"
+  // "Lançar agora" dentro de Planejamento.jsx: em vez de criar o lançamento
+  // a partir da tela de planejamento (decisão explícita do Matheus: "eu iria
+  // lançar o pagamento e na aba de planejamento, ele iria identificar e
+  // marcar"), isso só leva a pessoa pra Gastos com o formulário de novo
+  // lançamento já aberto e pré-preenchido (categoria + valor, quando fixo) —
+  // ela confirma/ajusta e lança do jeito de sempre.
+  const [presetLancamento, setPresetLancamento] = useState(null);
 
   // `silencioso=true` é pra recarregar depois de uma ação (confirmar um
   // lançamento no chat, editar permissões, etc) SEM esconder a tela atual
@@ -79,7 +96,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     if (!silencioso) setCarregando(true);
     setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
@@ -87,6 +104,8 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         supabase.from("assinaturas").select("*").eq("familia_id", membro.familia_id).order("dia_cobranca"),
         supabase.from("investimentos").select("*").eq("familia_id", membro.familia_id),
         supabase.from("categorias").select("*").eq("familia_id", membro.familia_id).order("created_at"),
+        supabase.from("planejamento_itens").select("*").eq("familia_id", membro.familia_id).order("created_at"),
+        supabase.from("familias").select("*").eq("id", membro.familia_id).single(),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -94,11 +113,18 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       if (e4) throw e4;
       if (e5) throw e5;
       if (e6) throw e6;
-      // categorias (migração 10) é uma tabela nova — se o banco do Matheus
-      // ainda não rodou essa migração, e7 vem preenchido (tabela não existe);
-      // em vez de travar o app inteiro (as categorias fixas continuam
-      // funcionando sem essa tabela), só loga e segue com a lista vazia.
+      // categorias (migração 10) e planejamento_itens (migração 12) são
+      // tabelas novas — se o banco do Matheus ainda não rodou essas
+      // migrações, e7/e8 vêm preenchidos (tabela não existe); em vez de
+      // travar o app inteiro, só loga e segue com a lista vazia. e9
+      // (familias.categorizacao_automatica) é só uma coluna nova numa tabela
+      // que já existia — se a migração 12 ainda não rodou, a coluna não
+      // existe e este select falha inteiro; mesma lógica, só loga e segue
+      // (a opção "deixar o COSMO decidir" simplesmente não aparece até a
+      // migração rodar).
       if (e7) console.error("Não consegui carregar categorias personalizadas (rodou a migração 10?):", e7.message);
+      if (e8) console.error("Não consegui carregar o planejamento financeiro (rodou a migração 12?):", e8.message);
+      if (e9) console.error("Não consegui carregar as configurações da família (rodou a migração 12?):", e9.message);
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
@@ -106,6 +132,8 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       setAssinaturas(assn || []);
       setInvestimentos(inv || []);
       setCategorias(cats || []);
+      setPlanejamentoItens(planj || []);
+      setFamiliaInfo(fam || null);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
     } finally {
@@ -120,25 +148,27 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // frentesGasto/fontesReceita (migração 10, categorias personalizadas,
   // 16/09/2026): mescla as categorias FIXAS da doutrina financeira do COSMO
   // (theme.js) com as que a própria família criou (tabela `categorias`) —
-  // cada item já sai com um `Icone` (componente React) resolvido, pra quem
-  // usa essas listas (Gastos/Receitas/NovoLancamento/ImportarArquivo/
-  // ChatCosmo) nunca precisar saber a diferença entre uma fixa e uma
-  // personalizada.
+  // cada item já sai com `Icone` (componente React, categorias fixas ou
+  // antigas) OU `emoji` (string, categorias novas — migração 12, 25/09/2026:
+  // emoji substituiu a galeria de ícones) já resolvido, pra quem usa essas
+  // listas (Gastos/Receitas/NovoLancamento/ImportarArquivo/ChatCosmo) nunca
+  // precisar saber a diferença entre uma fixa e uma personalizada, nem entre
+  // uma personalizada antiga (ícone) e uma nova (emoji).
   const frentesGasto = useMemo(() => {
-    const fixas = FRENTES_GASTO.map((f) => ({ ...f, Icone: ICONE_FRENTE_GASTO[f.chave] || IconStar, personalizada: false }));
+    const fixas = FRENTES_GASTO.map((f) => ({ ...f, Icone: ICONE_FRENTE_GASTO[f.chave] || IconStar, emoji: null, personalizada: false }));
     const extras = categorias.filter((c) => c.tipo === "gasto").map((c) => ({
       chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft, corTexto: c.cor,
-      Icone: (GALERIA_ICONES[c.icone] || GALERIA_ICONES.estrela).Icone,
+      ...resolverIconeCategoria(c.icone),
       personalizada: true, id: c.id,
     }));
     return [...fixas, ...extras];
   }, [categorias]);
 
   const fontesReceita = useMemo(() => {
-    const fixas = FONTES_RECEITA.map((f) => ({ ...f, Icone: ICONE_FONTE_RECEITA[f.chave] || IconStar, personalizada: false }));
+    const fixas = FONTES_RECEITA.map((f) => ({ ...f, Icone: ICONE_FONTE_RECEITA[f.chave] || IconStar, emoji: null, personalizada: false }));
     const extras = categorias.filter((c) => c.tipo === "receita").map((c) => ({
       chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft,
-      Icone: (GALERIA_ICONES[c.icone] || GALERIA_ICONES.estrela).Icone,
+      ...resolverIconeCategoria(c.icone),
       personalizada: true, id: c.id,
     }));
     return [...fixas, ...extras];
@@ -152,6 +182,19 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // `undefined` aqui esconde o seletor pra ela, do mesmo jeito que o
   // MemberView de antes nunca passava essa lista.
   const membrosParaLancar = podeEditar ? membros : undefined;
+  // Default true por segurança (bate com o default da coluna no banco,
+  // migração 12) enquanto familiaInfo ainda não carregou ou se a migração
+  // ainda não rodou nesta instalação.
+  const categorizacaoAutomatica = familiaInfo?.categorizacao_automatica ?? true;
+
+  // Chamado por Planejamento.jsx quando a pessoa toca em "lançar agora" num
+  // item ainda em aberto — só preenche o formulário, não lança nada sozinho
+  // (ver comentário no state `presetLancamento` acima).
+  function lancarAgoraDoPlanejamento(item) {
+    setPresetLancamento({ categoria: item.categoria, valor: item.tipo_valor === "fixo" ? item.valor_fixo : "" });
+    setAba("gastos");
+    setTela(null);
+  }
 
   function irPara(destino) {
     if (destino === "painel" || destino === "receitas" || destino === "gastos") {
@@ -182,18 +225,22 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
           {aba === "painel" && (
             <Painel
               membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} assinaturas={assinaturas} investimentos={investimentos}
-              frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+              frentesGasto={frentesGasto} fontesReceita={fontesReceita} categorizacaoAutomatica={categorizacaoAutomatica}
               onNavegar={irPara} onSalvo={() => carregarTudo({ silencioso: true })}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
             />
           )}
 
           {aba === "receitas" && (
-            <Receitas membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Receitas membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId} categorizacaoAutomatica={categorizacaoAutomatica} onSalvo={() => carregarTudo({ silencioso: true })} />
           )}
 
           {aba === "gastos" && (
-            <Gastos membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId} onSalvo={() => carregarTudo({ silencioso: true })} />
+            <Gastos
+              membro={membro} membros={membrosParaLancar} lancamentos={lancamentos} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
+              presetLancamento={presetLancamento} onPresetConsumido={() => setPresetLancamento(null)} categorizacaoAutomatica={categorizacaoAutomatica}
+              onSalvo={() => carregarTudo({ silencioso: true })}
+            />
           )}
 
           {aba === "mais" && (
@@ -201,6 +248,8 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
               frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+              lancamentos={lancamentos} planejamentoItens={planejamentoItens} onLancarAgora={lancarAgoraDoPlanejamento}
+              familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
             />
@@ -213,10 +262,16 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, lancamentos, planejamentoItens, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
-    return <CartaoDetalhe cartaoId={cartaoId} familiaId={membro.familia_id} contas={contas} podeEditar={podeEditar} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
+    return (
+      <CartaoDetalhe
+        cartaoId={cartaoId} familiaId={membro.familia_id} membro={membro} membros={membros} contas={contas} cartoes={cartoes}
+        frentesGasto={frentesGasto} fontesReceita={fontesReceita} podeEditar={podeEditar}
+        onVoltar={() => setTela("contas")} onSalvo={onSalvo}
+      />
+    );
   }
   if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} onVoltar={() => setTela(null)} />;
   if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
@@ -225,13 +280,39 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "importar") return <ImportarArquivo membro={membro} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
-  // Categorias personalizadas (migração 10, 16/09/2026) — disponível pros
-  // dois papéis, sem distinção, por isso não recebe `podeEditar` nenhum.
-  if (tela === "categorias") return <Categorias familiaId={membro.familia_id} categorias={categorias} onAtualizado={onSalvo} onVoltar={() => setTela(null)} />;
+  // Categorias personalizadas (migração 10, 16/09/2026) — a lista em si
+  // (criar/editar/excluir categoria) continua disponível pros dois papéis,
+  // sem distinção. A partir da leva 12 (25/09/2026), esta tela também ganhou
+  // o toggle de categorização automática (dono-only, RLS de "familias" já é
+  // assim) e o painel de categorização em lote — por isso agora recebe
+  // `podeEditar`, `familiaInfo` e os lançamentos.
+  if (tela === "categorias") {
+    return (
+      <Categorias
+        familiaId={membro.familia_id} categorias={categorias} lancamentos={lancamentos}
+        frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+        podeEditar={podeEditar} familiaInfo={familiaInfo}
+        onAtualizado={onSalvo} onVoltar={() => setTela(null)}
+      />
+    );
+  }
+  // Planejamento financeiro (migração 12, 25/09/2026) — mesma filosofia de
+  // "editar tudo" das outras telas de configuração: os dois papéis
+  // criam/editam/excluem itens, sem distinção (mesma decisão já tomada pra
+  // Categorias/Contas/Cartões).
+  if (tela === "planejamento") {
+    return (
+      <Planejamento
+        familiaId={membro.familia_id} itens={planejamentoItens} lancamentos={lancamentos} frentesGasto={frentesGasto}
+        onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onVoltar={() => setTela(null)}
+      />
+    );
+  }
 
   const itens = [
     { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
     { chave: "categorias", label: "Categorias", Icone: IconStar, cor: C.gold, corSoft: C.amberSoft },
+    { chave: "planejamento", label: "Planejamento financeiro", Icone: IconCalendar, cor: "#5B3FD9", corSoft: C.purpleSoft },
     { chave: "assinaturas", label: "Assinaturas", Icone: IconRefresh, cor: C.purple, corSoft: C.purpleSoft },
     { chave: "investimentos", label: "Investimentos", Icone: IconTrendingUp, cor: C.green, corSoft: C.greenSoft },
     { chave: "relatorios", label: "Relatórios", Icone: IconBarChart, cor: C.accent, corSoft: C.accentSoft },

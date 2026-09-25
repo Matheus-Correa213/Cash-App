@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, instituicaoDe, moeda, somarMeses } from "./theme.js";
+import { C, instituicaoDe, moeda, somarMeses, SEM_CATEGORIA } from "./theme.js";
 import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
@@ -25,10 +25,23 @@ import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
 // esse número é só o limite que o Matheus pediu pra tela.
 const MAX_PARCELAS = 15;
 
-export default function NovoLancamento({ membroLogado, membros, contas, cartoes, frentesGasto, fontesReceita, tipoInicial = "gasto", aberto, onAbrir, onFechar, onSalvo }) {
+// `categoriaInicial`/`valorInicial` (leva 12, 25/09/2026): usados pelo botão
+// "lançar agora" de Planejamento.jsx (via Gastos.jsx) pra abrir este
+// formulário já com a frente de gasto e o valor (quando fixo) do item de
+// planejamento escolhidos — a pessoa só confirma/ajusta e lança. Só valem no
+// primeiro render (este componente já vem montado de novo a cada vez que
+// Gastos.jsx é aberto a partir do Planejamento, então não precisa de um
+// efeito reagindo a mudança de prop).
+// `categorizacaoAutomatica` (leva 12, 25/09/2026): vem de familias.
+// categorizacao_automatica (OwnerView.jsx) — só quando true aparece a opção
+// "deixar o COSMO decidir" (chip especial, categoria SEM_CATEGORIA) pra
+// gastos. Pedido do Matheus: "o COSMO deveria ajudar, podendo analisar todos
+// os gastos e colocar cada um em sua categoria... é importante eu poder
+// editar essa configuração" — o toggle mora em Categorias.jsx.
+export default function NovoLancamento({ membroLogado, membros, contas, cartoes, frentesGasto, fontesReceita, tipoInicial = "gasto", categoriaInicial, valorInicial, categorizacaoAutomatica, aberto, onAbrir, onFechar, onSalvo }) {
   const [tipo, setTipo] = useState(tipoInicial);
-  const [categoria, setCategoria] = useState(tipo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave);
-  const [valor, setValor] = useState("");
+  const [categoria, setCategoria] = useState(() => categoriaInicial || (tipo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave));
+  const [valor, setValor] = useState(() => (valorInicial ? String(valorInicial) : ""));
   const [descricao, setDescricao] = useState("");
   const [data, setData] = useState(new Date().toISOString().slice(0, 10));
   const [membroId, setMembroId] = useState(membroLogado.id);
@@ -104,15 +117,20 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
         });
         if (error) throw error;
       } else {
-        const { error } = await supabase.from("lancamentos").insert({
+        // `.select().single()`: quando a categoria escolhida é "deixar o
+        // COSMO decidir" (SEM_CATEGORIA), precisamos do id do lançamento
+        // recém-criado pra chamar a categorização em segundo plano logo
+        // abaixo — o insert sozinho não devolve isso.
+        const { data: inserido, error } = await supabase.from("lancamentos").insert({
           familia_id: membroLogado.familia_id,
           membro_id: membroId,
           tipo, categoria, valor: Number(valor), descricao: descricao.trim() || null, data,
           conta_id: modoPagamento === "conta" ? idPagamento : null,
           cartao_id: modoPagamento === "cartao" ? idPagamento : null,
           tag: tag.trim() || null,
-        });
+        }).select().single();
         if (error) throw error;
+        if (categoria === SEM_CATEGORIA && inserido) categorizarEmSegundoPlano(inserido);
       }
       setValor(""); setDescricao(""); setTag(""); setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual("");
       onSalvo && onSalvo();
@@ -121,6 +139,39 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
       setErro(e.message || "Erro ao salvar.");
     } finally {
       setSalvando(false);
+    }
+  }
+
+  // Best-effort, de propósito: chamado DEPOIS que o lançamento já foi salvo
+  // com sucesso (com a categoria temporária SEM_CATEGORIA) — se isto falhar
+  // por qualquer motivo (sem internet, API fora, etc), o lançamento continua
+  // válido, só fica "aguardando categorização" até alguém corrigir na mão ou
+  // usar o botão "Categorizar com o COSMO" em Categorias.jsx. Nunca trava
+  // nem mostra erro pra quem lançou.
+  async function categorizarEmSegundoPlano(lancamento) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) return;
+      const categoriasResumo = {
+        gasto: frentesGasto.map((f) => ({ chave: f.chave, label: f.label })),
+        receita: fontesReceita.map((f) => ({ chave: f.chave, label: f.label })),
+      };
+      const resp = await fetch("/api/categorizar-lancamentos", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          lancamentos: [{ id: lancamento.id, tipo: lancamento.tipo, descricao: lancamento.descricao, valor: lancamento.valor }],
+          categoriasResumo,
+        }),
+      });
+      if (!resp.ok) return;
+      const { sugestoes } = await resp.json();
+      const sugestao = (sugestoes || [])[0];
+      if (!sugestao?.categoria) return;
+      const { error } = await supabase.from("lancamentos").update({ categoria: sugestao.categoria }).eq("id", lancamento.id);
+      if (!error) onSalvo && onSalvo();
+    } catch (e) {
+      console.error("Categorização automática do COSMO falhou (sem problema — dá pra ajustar em Categorias):", e.message);
     }
   }
 
@@ -163,11 +214,27 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
             const IconeOp = op.Icone;
             return (
               <ChipToggle key={op.chave} ativo={categoria === op.chave} cor={tipo === "receita" ? C.green : op.cor} onClick={() => setCategoria(op.chave)}>
-                {IconeOp && <IconeOp size={14} color={categoria === op.chave ? "#fff" : C.inkMute} strokeWidth={2} />}
+                {op.emoji ? (
+                  <span style={{ fontSize: 14, lineHeight: 1 }}>{op.emoji}</span>
+                ) : (
+                  IconeOp && <IconeOp size={14} color={categoria === op.chave ? "#fff" : C.inkMute} strokeWidth={2} />
+                )}
                 {op.label}
               </ChipToggle>
             );
           })}
+          {/* "Deixar o COSMO decidir" (leva 12, 25/09/2026) — só pra gastos, e
+              só quando a família deixou ligado (familias.categorizacao_
+              automatica, ajustável em Categorias.jsx). Escolher isto grava o
+              lançamento com a categoria temporária SEM_CATEGORIA; a
+              categoria de verdade chega sozinha logo em seguida (ver
+              categorizarEmSegundoPlano) ou, se isso falhar, pelo botão
+              "Categorizar com o COSMO" em Categorias.jsx. */}
+          {tipo === "gasto" && categorizacaoAutomatica && (
+            <ChipToggle ativo={categoria === SEM_CATEGORIA} cor="#8A05BE" onClick={() => setCategoria(SEM_CATEGORIA)}>
+              🤖 Deixar o COSMO decidir
+            </ChipToggle>
+          )}
         </div>
       </div>
 

@@ -98,6 +98,15 @@ export function fonteDe(categoria) {
   return FONTES_RECEITA.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line };
 }
 
+// Categorização automática pelo COSMO (leva 12, 25/09/2026) — chave especial
+// usada como `categoria` temporária de um lançamento recém-criado quando a
+// pessoa escolhe "deixar o COSMO decidir" em vez de uma frente de gasto de
+// verdade (ver NovoLancamento.jsx, Categorias.jsx e api/categorizar-
+// lancamentos.js). Nunca é uma categoria de verdade — é só um marcador de
+// "ainda não categorizado", substituído assim que o COSMO (ou a própria
+// pessoa, na tela Categorias) escolhe a categoria real.
+export const SEM_CATEGORIA = "__sem_categoria__";
+
 export function moeda(v) {
   return `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`;
 }
@@ -106,6 +115,22 @@ export function inicioMesISO(d = new Date()) {
   const x = new Date(d);
   x.setDate(1);
   return x.toISOString().slice(0, 10);
+}
+
+// "YYYY-MM" do mês atual — valor inicial do seletor de mês/ano de Gastos e
+// Receitas (leva 12, 25/09/2026: "gastos precisa ter a separação dos meses
+// dos anos, e você seleciona o mês que quiser ver"), no mesmo formato que
+// `<input type="month">` usa nativamente.
+export function mesAtualISO() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+// Nome por extenso de um mês no formato "YYYY-MM" (ex: "setembro de 2026") —
+// usado no cabeçalho de Gastos/Receitas/Planejamento quando o seletor nativo
+// de mês não é suficiente (ex: título da tela).
+export function nomeMes(mesISO) {
+  const [ano, mes] = mesISO.split("-").map(Number);
+  return new Date(Date.UTC(ano, mes - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
 // Soma meses a uma data ISO (YYYY-MM-DD) preservando o dia quando possível —

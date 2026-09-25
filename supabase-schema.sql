@@ -9,6 +9,9 @@ create table if not exists familias (
   id uuid primary key default gen_random_uuid(),
   nome text not null default 'Minha Família',
   dono_user_id uuid not null references auth.users(id) on delete cascade,
+  -- Migração 12 (25/09/2026) — liga/desliga o COSMO sugerindo categoria
+  -- sozinho em lançamentos novos sem categoria escolhida manualmente.
+  categorizacao_automatica boolean not null default true,
   created_at timestamptz not null default now()
 );
 
@@ -523,6 +526,34 @@ create policy "categorias: familia ve e mexe" on categorias
   with check (familia_id = minha_familia_id());
 
 grant select, insert, update, delete on categorias to authenticated;
+
+-- planejamento_itens (migração 12, 25/09/2026) — "lembrete de boletos": a
+-- família cadastra contas que espera pagar (fixas ou de valor variável,
+-- recorrentes todo mês ou de um mês específico), com dia de vencimento. Não
+-- guarda "pago/não pago" — isso é calculado no frontend batendo a categoria
+-- do item contra os lançamentos reais daquele mês (ver Planejamento.jsx):
+-- existe gasto lançado naquela categoria naquele mês → aparece como pago,
+-- com o valor real; senão, fica em aberto. Evita duas fontes de verdade.
+create table if not exists planejamento_itens (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  nome text not null,
+  categoria text not null,
+  tipo_valor text not null default 'fixo' check (tipo_valor in ('fixo', 'variavel')),
+  valor_fixo numeric(12,2),
+  dia_vencimento smallint check (dia_vencimento between 1 and 31),
+  recorrente boolean not null default true,
+  mes_especifico date,
+  created_at timestamptz not null default now()
+);
+
+alter table planejamento_itens enable row level security;
+
+create policy "planejamento: familia ve e mexe" on planejamento_itens
+  for all using (familia_id = minha_familia_id())
+  with check (familia_id = minha_familia_id());
+
+grant select, insert, update, delete on planejamento_itens to authenticated;
 
 -- saldos_contas() — ampliado na migração 9 (unificação do acesso da
 -- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido

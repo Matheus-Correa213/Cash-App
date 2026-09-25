@@ -80,6 +80,9 @@ export function IconCoffee(p) { return <Svg {...p}><path d="M4 9h13v6a4 4 0 0 1-
 export function IconMusic(p) { return <Svg {...p}><path d="M9 18V5l11-2v13" /><circle cx="6.5" cy="18" r="2.5" /><circle cx="17.5" cy="16" r="2.5" /></Svg>; }
 export function IconGraduationCap(p) { return <Svg {...p}><path d="M2 9 12 4l10 5-10 5L2 9Z" /><path d="M6 11.5V16c0 1.5 2.5 3 6 3s6-1.5 6-3v-4.5" /><path d="M21 9v6" /></Svg>; }
 
+// Ícone do menu "Planejamento financeiro" (leva 12, 25/09/2026).
+export function IconCalendar(p) { return <Svg {...p}><rect x="3" y="5" width="18" height="16" rx="2.5" /><line x1="3" y1="10" x2="21" y2="10" /><line x1="8" y1="3" x2="8" y2="7" /><line x1="16" y1="3" x2="16" y2="7" /></Svg>; }
+
 // Galeria de ícones pra tela de categorias personalizadas — cada categoria
 // nova guarda a CHAVE do ícone escolhido (coluna `icone`), nunca o
 // componente em si; isto aqui é o mapa chave → componente, junto com um
@@ -102,6 +105,32 @@ export const GALERIA_ICONES = {
   trabalho: { Icone: IconBriefcase2, label: "Trabalho" },
   livro: { Icone: IconBook, label: "Livro" },
 };
+
+// Emoji nas categorias personalizadas (migração 12, 25/09/2026) — o Matheus
+// pediu "capacidade de criar categorias com diferentes emoji e cores" e
+// escolheu SUBSTITUIR a galeria de ícones acima por emoji de verdade (mais
+// expressivo, e digitável direto do teclado do celular). categorias.icone
+// continua sendo o mesmo campo de texto de sempre: categorias CRIADAS ANTES
+// desta leva guardam uma chave da GALERIA_ICONES acima (ex: "carrinho") e
+// continuam mostrando o ícone SVG de sempre — nunca perderam nada; categorias
+// criadas AGORA guardam o emoji escolhido (ex: "🛒") direto. resolverIcone
+// decide qual dos dois casos é, só olhando se o valor bate com uma chave
+// conhecida da galeria.
+export function resolverIconeCategoria(valor) {
+  const legado = GALERIA_ICONES[valor];
+  if (legado) return { Icone: legado.Icone, emoji: null };
+  return { Icone: null, emoji: valor || "⭐" };
+}
+
+// Grade de sugestões rápidas pra tela de Categorias — a pessoa também pode
+// digitar/colar QUALQUER outro emoji no campo de texto ao lado (no celular,
+// tocar nesse campo já abre o teclado de emoji nativo).
+export const EMOJI_SUGERIDOS = [
+  "🍔", "🛒", "🚗", "⛽", "🏠", "💊", "🎓", "✈️", "🎁", "🐶",
+  "⚽", "🎮", "📱", "💇", "🧾", "🐾", "⛪", "💳", "🎂", "👶",
+  "🧴", "🛠️", "📚", "🎵", "☕", "🚌", "🏥", "🧹", "🛍️", "💡",
+  "📺", "🍕", "🍺", "💰", "⭐",
+];
 
 // Mapas chave → ícone, pra emprestar em Gastos.jsx / Receitas.jsx / chips do
 // NovoLancamento.jsx sem theme.js precisar importar JSX (theme.js é mantido

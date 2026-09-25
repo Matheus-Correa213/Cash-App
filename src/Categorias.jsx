@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C } from "./theme.js";
-import { GALERIA_ICONES } from "./Icons.jsx";
+import { C, moeda, SEM_CATEGORIA } from "./theme.js";
+import { resolverIconeCategoria, EMOJI_SUGERIDOS } from "./Icons.jsx";
 
 // Categorias personalizadas — migração 10 ("Criar categorias, isso é
 // essencial, temos categorias limitadas", 16/09/2026). As 6 frentes de gasto
@@ -52,7 +52,7 @@ function normalizarChave(nome) {
   );
 }
 
-export default function Categorias({ familiaId, categorias, onAtualizado, onVoltar }) {
+export default function Categorias({ familiaId, categorias, lancamentos = [], frentesGasto = [], fontesReceita = [], podeEditar = false, familiaInfo, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
 
@@ -74,6 +74,12 @@ export default function Categorias({ familiaId, categorias, onAtualizado, onVolt
       <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 16, lineHeight: 1.5 }}>
         As categorias fixas da doutrina financeira do COSMO (dia a dia, recorrentes, trabalho…) continuam do jeito que são. Aqui vocês dois podem criar quantas categorias próprias quiserem — elas aparecem somadas às fixas em Gastos, Receitas, Novo lançamento e no chat do COSMO.
       </div>
+
+      <PainelCategorizacao
+        familiaId={familiaId} familiaInfo={familiaInfo} podeEditar={podeEditar}
+        lancamentos={lancamentos} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+        onAtualizado={onAtualizado}
+      />
 
       <div style={cardStyle}>
         <div style={h2}>Categorias de gasto</div>
@@ -104,15 +110,162 @@ export default function Categorias({ familiaId, categorias, onAtualizado, onVolt
 }
 
 function ItemCategoria({ categoria, onEditar, onExcluir }) {
-  const Icone = (GALERIA_ICONES[categoria.icone] || GALERIA_ICONES.estrela).Icone;
+  const { Icone, emoji } = resolverIconeCategoria(categoria.icone);
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
       <div style={{ width: 34, height: 34, borderRadius: 10, background: categoria.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-        <Icone size={16} color="#fff" strokeWidth={2} />
+        {emoji ? <span style={{ fontSize: 16, lineHeight: 1 }}>{emoji}</span> : <Icone size={16} color="#fff" strokeWidth={2} />}
       </div>
       <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{categoria.label}</div>
       <button style={btnGhost} onClick={onEditar}>editar</button>
       <button style={btnGhost} onClick={onExcluir}>excluir</button>
+    </div>
+  );
+}
+
+// Categorização automática pelo COSMO — leva 12 (25/09/2026), pedido do
+// Matheus: "o COSMO deveria ajudar, podendo analisar todos os gastos e
+// colocar cada um em sua categoria, comigo podendo ajustar." Resposta dele
+// à pergunta de escopo ("automático em lançamentos novos, ou um botão pra
+// categorizar os que já existem, ou os dois?"): "Os 2, mas é importante eu
+// poder editar essa configuração." Por isso duas peças nesta tela:
+//   1) o toggle (só dono, mesma regra de RLS de "familias") que liga/desliga
+//      a opção "deixar o COSMO decidir" em Novo lançamento;
+//   2) este painel — categoriza em LOTE os lançamentos que já ficaram
+//      pendentes (categoria = SEM_CATEGORIA), sempre com revisão antes de
+//      gravar (a diferença pro automático de cima é só essa: aqui a pessoa
+//      vê e pode trocar cada sugestão antes de confirmar).
+function PainelCategorizacao({ familiaId, familiaInfo, podeEditar, lancamentos, frentesGasto, fontesReceita, onAtualizado }) {
+  const pendentes = lancamentos.filter((l) => l.categoria === SEM_CATEGORIA);
+  const [sugestoes, setSugestoes] = useState(null); // null = ainda não pediu; {} = pedido, um id -> categoria por item
+  const [buscando, setBuscando] = useState(false);
+  const [confirmando, setConfirmando] = useState(false);
+  const [erro, setErro] = useState("");
+  const [salvandoToggle, setSalvandoToggle] = useState(false);
+
+  async function alternarAutomatico(novoValor) {
+    setSalvandoToggle(true);
+    try {
+      // `.select()` no update, de propósito — mesmo cuidado de sempre com
+      // "0 linhas afetadas" (aqui seria: alguém sem ser dono tentando mudar,
+      // já que a RLS de UPDATE em "familias" é dono-only).
+      const { data, error } = await supabase.from("familias").update({ categorizacao_automatica: novoValor }).eq("id", familiaId).select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("Não consegui salvar — só o administrador da família pode mudar essa configuração.");
+      onAtualizado();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setSalvandoToggle(false);
+    }
+  }
+
+  async function pedirSugestoes() {
+    setBuscando(true); setErro("");
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error("Sessão expirada — recarregue a página.");
+      const categoriasResumo = {
+        gasto: frentesGasto.map((f) => ({ chave: f.chave, label: f.label })),
+        receita: fontesReceita.map((f) => ({ chave: f.chave, label: f.label })),
+      };
+      const resp = await fetch("/api/categorizar-lancamentos", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: `Bearer ${session.access_token}` },
+        body: JSON.stringify({
+          lancamentos: pendentes.map((l) => ({ id: l.id, tipo: l.tipo, descricao: l.descricao, valor: l.valor })),
+          categoriasResumo,
+        }),
+      });
+      const corpo = await resp.json();
+      if (!resp.ok) throw new Error(corpo.error || "Erro ao pedir sugestões ao COSMO.");
+      const mapa = {};
+      for (const s of corpo.sugestoes || []) mapa[s.id] = s.categoria;
+      setSugestoes(mapa);
+    } catch (e) {
+      setErro(e.message || "Erro ao pedir sugestões.");
+    } finally {
+      setBuscando(false);
+    }
+  }
+
+  async function confirmarTudo() {
+    setConfirmando(true); setErro("");
+    try {
+      const tarefas = pendentes
+        .filter((l) => sugestoes[l.id])
+        .map((l) => supabase.from("lancamentos").update({ categoria: sugestoes[l.id] }).eq("id", l.id).select());
+      const resultados = await Promise.all(tarefas);
+      const comErro = resultados.find((r) => r.error);
+      if (comErro) throw comErro.error;
+      setSugestoes(null);
+      onAtualizado();
+    } catch (e) {
+      setErro(e.message || "Erro ao confirmar categorias.");
+    } finally {
+      setConfirmando(false);
+    }
+  }
+
+  return (
+    <div style={cardStyle}>
+      <div style={h2}>Categorização automática do COSMO</div>
+
+      {podeEditar ? (
+        <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: C.ink, cursor: "pointer", marginBottom: 14 }}>
+          <input
+            type="checkbox"
+            checked={familiaInfo?.categorizacao_automatica ?? true}
+            disabled={salvandoToggle}
+            onChange={(e) => alternarAutomatico(e.target.checked)}
+          />
+          Deixar o COSMO categorizar sozinho quando alguém escolher "deixar o COSMO decidir" num lançamento novo
+        </label>
+      ) : (
+        <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 14 }}>
+          {familiaInfo?.categorizacao_automatica ?? true ? "A categorização automática está ligada nesta família." : "A categorização automática está desligada nesta família."} Só o administrador pode mudar isso.
+        </div>
+      )}
+
+      <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 10, lineHeight: 1.5 }}>
+        {pendentes.length === 0
+          ? "Nenhum lançamento esperando categoria no momento."
+          : `${pendentes.length} lançamento${pendentes.length > 1 ? "s" : ""} aguardando categoria.`}
+      </div>
+
+      {erro && <div style={{ color: C.danger, fontSize: 12.5, marginBottom: 10 }}>{erro}</div>}
+
+      {pendentes.length > 0 && sugestoes === null && (
+        <button style={btn} onClick={pedirSugestoes} disabled={buscando}>{buscando ? "Pedindo ao COSMO…" : "Categorizar com o COSMO"}</button>
+      )}
+
+      {sugestoes !== null && (
+        <div>
+          {pendentes.map((l) => {
+            const opcoes = l.tipo === "receita" ? fontesReceita : frentesGasto;
+            const valorEscolhido = sugestoes[l.id] || opcoes[0]?.chave || "";
+            return (
+              <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 0", borderBottom: `1px solid ${C.line}` }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.descricao || "(sem descrição)"}</div>
+                  <div style={{ fontSize: 11, color: C.inkFaint }}>{l.tipo === "receita" ? "+" : "-"}{moeda(l.valor)} · {l.data}</div>
+                </div>
+                <select
+                  value={valorEscolhido}
+                  onChange={(e) => setSugestoes({ ...sugestoes, [l.id]: e.target.value })}
+                  style={{ padding: "7px 9px", borderRadius: 8, border: `1px solid ${C.line}`, fontSize: 12.5 }}
+                >
+                  {opcoes.map((op) => <option key={op.chave} value={op.chave}>{op.label}</option>)}
+                </select>
+              </div>
+            );
+          })}
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button style={btn} onClick={confirmarTudo} disabled={confirmando}>{confirmando ? "Confirmando…" : "Confirmar tudo"}</button>
+            <button type="button" style={btnGhost} onClick={() => setSugestoes(null)}>Cancelar</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -130,17 +283,41 @@ function SeletorCor({ valor, onEscolher }) {
   );
 }
 
-function SeletorIcone({ valor, onEscolher }) {
+// Substitui a antiga galeria de ícones SVG (migração 12, 25/09/2026) — a
+// pessoa digita/cola qualquer emoji no campo (no celular isso já abre o
+// teclado de emoji nativo) ou toca numa das sugestões rápidas da grade.
+// Categorias criadas ANTES desta leva continuam mostrando o ícone SVG de
+// sempre (ver resolverIconeCategoria em Icons.jsx) — isto aqui só afeta o
+// que é escolhido DAQUI PRA FRENTE.
+function SeletorEmoji({ valor, onEscolher }) {
+  // Pega só o primeiro "grapheme" digitado/colado — evita que colar uma
+  // frase inteira vire o "emoji" da categoria por engano.
+  function aoDigitar(texto) {
+    const graphemes = Array.from(texto.trim());
+    onEscolher(graphemes.length ? graphemes[0] : "");
+  }
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-      {Object.entries(GALERIA_ICONES).map(([chave, { Icone, label }]) => (
-        <button
-          key={chave} type="button" title={label} onClick={() => onEscolher(chave)}
-          style={{ width: 36, height: 36, borderRadius: 10, background: valor === chave ? C.ink : C.line, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}
-        >
-          <Icone size={16} color={valor === chave ? "#fff" : C.inkMute} strokeWidth={2} />
-        </button>
-      ))}
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
+        <div style={{ width: 46, height: 46, borderRadius: 12, background: C.line, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }}>
+          {valor || "🙂"}
+        </div>
+        <input
+          style={{ ...input, width: 110, textAlign: "center", fontSize: 20 }}
+          placeholder="🙂" value={valor || ""}
+          onChange={(e) => aoDigitar(e.target.value)}
+        />
+      </div>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+        {EMOJI_SUGERIDOS.map((e) => (
+          <button
+            key={e} type="button" onClick={() => onEscolher(e)}
+            style={{ width: 36, height: 36, borderRadius: 10, background: valor === e ? C.ink : C.line, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}
+          >
+            {e}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -160,7 +337,7 @@ function NovaCategoria({ familiaId, categorias, onSalvo, onCancelar }) {
   const [tipo, setTipo] = useState("gasto");
   const [nome, setNome] = useState("");
   const [cor, setCor] = useState(PALETA_CORES[0]);
-  const [icone, setIcone] = useState("estrela");
+  const [icone, setIcone] = useState("⭐");
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
 
@@ -208,8 +385,8 @@ function NovaCategoria({ familiaId, categorias, onSalvo, onCancelar }) {
         <SeletorCor valor={cor.cor} onEscolher={setCor} />
       </div>
       <div>
-        <div style={{ fontSize: 12, color: C.inkMute, marginBottom: 6 }}>Ícone</div>
-        <SeletorIcone valor={icone} onEscolher={setIcone} />
+        <div style={{ fontSize: 12, color: C.inkMute, marginBottom: 6 }}>Emoji</div>
+        <SeletorEmoji valor={icone} onEscolher={setIcone} />
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Criar categoria"}</button>
@@ -254,8 +431,8 @@ function EditarCategoria({ categoria, onSalvo, onCancelar }) {
         <SeletorCor valor={cor.cor} onEscolher={setCor} />
       </div>
       <div>
-        <div style={{ fontSize: 12, color: C.inkMute, marginBottom: 6 }}>Ícone</div>
-        <SeletorIcone valor={icone} onEscolher={setIcone} />
+        <div style={{ fontSize: 12, color: C.inkMute, marginBottom: 6 }}>Emoji</div>
+        <SeletorEmoji valor={icone} onEscolher={setIcone} />
       </div>
       <div style={{ display: "flex", gap: 8 }}>
         <button style={btn} type="submit" disabled={salvando}>{salvando ? "Salvando…" : "Salvar alterações"}</button>
