@@ -1,7 +1,7 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C, moeda, SEM_CATEGORIA } from "./theme.js";
-import { resolverIconeCategoria, EMOJI_SUGERIDOS } from "./Icons.jsx";
+import { C, moeda, mesAtualISO, nomeMes, SEM_CATEGORIA } from "./theme.js";
+import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./CategoriaCampos.jsx";
 
 // Categorias personalizadas — migração 10 ("Criar categorias, isso é
 // essencial, temos categorias limitadas", 16/09/2026). As 6 frentes de gasto
@@ -23,41 +23,30 @@ const input = { width: "100%", padding: "10px 12px", borderRadius: 9, border: `1
 const btn = { padding: "10px 16px", borderRadius: 9, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" };
 const btnGhost = { padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" };
 
-// Paleta curada, nas mesmas cores já usadas no resto do app (ver theme.js) —
-// pra uma categoria nova nunca destoar visualmente das fixas.
-const PALETA_CORES = [
-  { cor: "#0469FB", corSoft: "#E7F0FE" },
-  { cor: "#7C5CFC", corSoft: "#EFEAFE" },
-  { cor: "#1FAE7A", corSoft: "#E7FAF1" },
-  { cor: "#FF5A5F", corSoft: "#FFEEEF" },
-  { cor: "#F5934B", corSoft: "#FFF1E4" },
-  { cor: "#E3A400", corSoft: "#FFF6DA" },
-  { cor: "#0EA5A0", corSoft: "#E1F7F6" },
-  { cor: "#E85D8A", corSoft: "#FDE9F0" },
-  { cor: "#8A05BE", corSoft: "#FDF3FF" },
-  { cor: "#5B647A", corSoft: "#EEF0F6" },
-];
-
-// Transforma o nome digitado numa chave estável (sem acento, minúscula,
-// espaços viram "_") — é essa chave, não o nome, que fica gravada em cada
-// lançamento, então precisa ser previsível e nunca mudar depois de criada.
-function normalizarChave(nome) {
-  return (
-    String(nome || "")
-      .normalize("NFD").replace(/[̀-ͯ]/g, "")
-      .toLowerCase().trim()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-    || "categoria"
-  );
-}
-
 export default function Categorias({ familiaId, categorias, lancamentos = [], frentesGasto = [], fontesReceita = [], podeEditar = false, familiaInfo, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
+  // Seletor de mês (leva 13, 26/09/2026, pedido do Matheus: "na aba
+  // categorias, ter todas, com seus gastos") — mesmo padrão de Gastos/
+  // Receitas/Planejamento.
+  const [mes, setMes] = useState(mesAtualISO());
 
-  const doGasto = categorias.filter((c) => c.tipo === "gasto");
-  const doReceita = categorias.filter((c) => c.tipo === "receita");
+  // Total lançado em cada categoria no mês escolhido. Mesma separação
+  // cartão/conta usada em todo o resto do app desde a leva 12 (compra de
+  // cartão só aparece dentro do Cartão em detalhe, nunca somada aqui). A
+  // chave do mapa inclui o tipo porque uma categoria de gasto e uma de
+  // receita podem, em tese, ter a mesma `chave` (ela só é única dentro do
+  // próprio tipo).
+  const totalPorCategoria = useMemo(() => {
+    const mapa = {};
+    for (const l of lancamentos) {
+      if (l.data.slice(0, 7) !== mes) continue;
+      if (l.tipo === "gasto" && l.cartao_id) continue;
+      const k = `${l.tipo}:${l.categoria}`;
+      mapa[k] = (mapa[k] || 0) + Number(l.valor);
+    }
+    return mapa;
+  }, [lancamentos, mes]);
 
   async function excluir(c) {
     if (!confirm(`Excluir a categoria "${c.label}"? Lançamentos que já usam ela continuam existindo (só deixam de mostrar cor/ícone bonitos) — ela só some da lista de opções pra novos lançamentos.`)) return;
@@ -70,9 +59,15 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
     <div>
       {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 14 }}>‹ Voltar</button>}
 
-      <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 4 }}>Categorias</div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, flexWrap: "wrap", marginBottom: 4 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink }}>Categorias</div>
+        <input
+          type="month" value={mes} onChange={(e) => setMes(e.target.value)}
+          style={{ padding: "6px 10px", borderRadius: 9, border: `1.5px solid ${C.line}`, background: "#fff", color: C.ink, fontSize: 12.5, fontWeight: 700 }}
+        />
+      </div>
       <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 16, lineHeight: 1.5 }}>
-        As categorias fixas da doutrina financeira do COSMO (dia a dia, recorrentes, trabalho…) continuam do jeito que são. Aqui vocês dois podem criar quantas categorias próprias quiserem — elas aparecem somadas às fixas em Gastos, Receitas, Novo lançamento e no chat do COSMO.
+        Todas as categorias — as fixas da doutrina financeira do COSMO e as que vocês dois criaram — com o total lançado em cada uma em {nomeMes(mes)}. Só as personalizadas podem ser editadas ou excluídas; a opção de criar uma nova também aparece direto ao lançar um gasto ou receita.
       </div>
 
       <PainelCategorizacao
@@ -83,22 +78,24 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
 
       <div style={cardStyle}>
         <div style={h2}>Categorias de gasto</div>
-        {doGasto.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma categoria de gasto personalizada ainda.</div>}
-        {doGasto.map((c) => (
-          editandoId === c.id
-            ? <EditarCategoria key={c.id} categoria={c} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
-            : <ItemCategoria key={c.id} categoria={c} onEditar={() => setEditandoId(c.id)} onExcluir={() => excluir(c)} />
-        ))}
+        {frentesGasto.map((item) => {
+          const total = totalPorCategoria[`gasto:${item.chave}`] || 0;
+          const bruta = item.personalizada ? categorias.find((c) => c.id === item.id) : null;
+          return editandoId === item.id
+            ? <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
+            : <ItemCategoria key={item.chave} item={item} total={total} podeMexer={!!bruta} onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)} />;
+        })}
       </div>
 
       <div style={cardStyle}>
         <div style={h2}>Categorias de receita</div>
-        {doReceita.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, marginBottom: 10 }}>Nenhuma categoria de receita personalizada ainda.</div>}
-        {doReceita.map((c) => (
-          editandoId === c.id
-            ? <EditarCategoria key={c.id} categoria={c} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
-            : <ItemCategoria key={c.id} categoria={c} onEditar={() => setEditandoId(c.id)} onExcluir={() => excluir(c)} />
-        ))}
+        {fontesReceita.map((item) => {
+          const total = totalPorCategoria[`receita:${item.chave}`] || 0;
+          const bruta = item.personalizada ? categorias.find((c) => c.id === item.id) : null;
+          return editandoId === item.id
+            ? <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
+            : <ItemCategoria key={item.chave} item={item} total={total} podeMexer={!!bruta} onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)} />;
+        })}
       </div>
 
       <div style={cardStyle}>
@@ -109,16 +106,30 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
   );
 }
 
-function ItemCategoria({ categoria, onEditar, onExcluir }) {
-  const { Icone, emoji } = resolverIconeCategoria(categoria.icone);
+// `item` já vem pronto de OwnerView.jsx (frentesGasto/fontesReceita
+// mesclados) — tanto pras fixas quanto pras personalizadas, sempre com
+// `Icone` (componente) OU `emoji` (string) resolvido. `podeMexer` só é true
+// pras personalizadas (têm uma linha de verdade na tabela `categorias` pra
+// editar/excluir); as fixas mostram um selo "fixa" no lugar dos botões.
+function ItemCategoria({ item, total, podeMexer, onEditar, onExcluir }) {
+  const Icone = item.Icone;
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
-      <div style={{ width: 34, height: 34, borderRadius: 10, background: categoria.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-        {emoji ? <span style={{ fontSize: 16, lineHeight: 1 }}>{emoji}</span> : <Icone size={16} color="#fff" strokeWidth={2} />}
+      <div style={{ width: 34, height: 34, borderRadius: 10, background: item.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        {item.emoji ? <span style={{ fontSize: 16, lineHeight: 1 }}>{item.emoji}</span> : (Icone && <Icone size={16} color="#fff" strokeWidth={2} />)}
       </div>
-      <div style={{ flex: 1, fontSize: 13.5, fontWeight: 700, color: C.ink }}>{categoria.label}</div>
-      <button style={btnGhost} onClick={onEditar}>editar</button>
-      <button style={btnGhost} onClick={onExcluir}>excluir</button>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.label}</div>
+        <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{total > 0 ? moeda(total) : "sem lançamentos neste mês"}</div>
+      </div>
+      {podeMexer ? (
+        <>
+          <button style={btnGhost} onClick={onEditar}>editar</button>
+          <button style={btnGhost} onClick={onExcluir}>excluir</button>
+        </>
+      ) : (
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>fixa</span>
+      )}
     </div>
   );
 }
@@ -266,58 +277,6 @@ function PainelCategorizacao({ familiaId, familiaInfo, podeEditar, lancamentos, 
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-function SeletorCor({ valor, onEscolher }) {
-  return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-      {PALETA_CORES.map((p) => (
-        <button
-          key={p.cor} type="button" onClick={() => onEscolher(p)}
-          style={{ width: 30, height: 30, borderRadius: "50%", background: p.cor, border: valor === p.cor ? `3px solid ${C.ink}` : "3px solid transparent", cursor: "pointer", padding: 0 }}
-        />
-      ))}
-    </div>
-  );
-}
-
-// Substitui a antiga galeria de ícones SVG (migração 12, 25/09/2026) — a
-// pessoa digita/cola qualquer emoji no campo (no celular isso já abre o
-// teclado de emoji nativo) ou toca numa das sugestões rápidas da grade.
-// Categorias criadas ANTES desta leva continuam mostrando o ícone SVG de
-// sempre (ver resolverIconeCategoria em Icons.jsx) — isto aqui só afeta o
-// que é escolhido DAQUI PRA FRENTE.
-function SeletorEmoji({ valor, onEscolher }) {
-  // Pega só o primeiro "grapheme" digitado/colado — evita que colar uma
-  // frase inteira vire o "emoji" da categoria por engano.
-  function aoDigitar(texto) {
-    const graphemes = Array.from(texto.trim());
-    onEscolher(graphemes.length ? graphemes[0] : "");
-  }
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}>
-        <div style={{ width: 46, height: 46, borderRadius: 12, background: C.line, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 }}>
-          {valor || "🙂"}
-        </div>
-        <input
-          style={{ ...input, width: 110, textAlign: "center", fontSize: 20 }}
-          placeholder="🙂" value={valor || ""}
-          onChange={(e) => aoDigitar(e.target.value)}
-        />
-      </div>
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-        {EMOJI_SUGERIDOS.map((e) => (
-          <button
-            key={e} type="button" onClick={() => onEscolher(e)}
-            style={{ width: 36, height: 36, borderRadius: 10, background: valor === e ? C.ink : C.line, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 17 }}
-          >
-            {e}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }

@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, somarMeses, SEM_CATEGORIA } from "./theme.js";
-import { IconCard, IconCash, IconCreditCard, IconClose } from "./Icons.jsx";
+import { IconCard, IconCash, IconCreditCard, IconClose, IconPlus } from "./Icons.jsx";
+import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./CategoriaCampos.jsx";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
 // conta/cartão (cores por instituição) e, quando o pagamento é num cartão,
@@ -60,6 +61,18 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
 
+  // Criar categoria direto daqui (leva 13, 26/09/2026, pedido do Matheus:
+  // "poder criar uma categoria ao lançar um gasto ou receita, e ela já ficar
+  // salva") — chip própria que abre um formulário compacto (nome + cor +
+  // emoji, mesmos seletores da tela Categorias) sem sair do lançamento; o
+  // tipo já é o do lançamento em andamento, não precisa escolher de novo.
+  const [criandoCategoria, setCriandoCategoria] = useState(false);
+  const [novaCatNome, setNovaCatNome] = useState("");
+  const [novaCatCor, setNovaCatCor] = useState(PALETA_CORES[0]);
+  const [novaCatEmoji, setNovaCatEmoji] = useState("⭐");
+  const [novaCatErro, setNovaCatErro] = useState("");
+  const [novaCatSalvando, setNovaCatSalvando] = useState(false);
+
   const opcoesCategoria = tipo === "receita" ? fontesReceita : frentesGasto;
   const corTipo = tipo === "receita" ? C.green : C.coral;
 
@@ -88,6 +101,42 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
     setTipo(novo);
     setCategoria(novo === "receita" ? fontesReceita[0].chave : frentesGasto[0].chave);
     if (novo === "receita") { setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual(""); }
+    // Chave/unicidade da categoria nova é checada dentro do tipo — trocar de
+    // gasto pra receita (ou vice-versa) no meio da criação não faz sentido.
+    setCriandoCategoria(false); setNovaCatErro("");
+  }
+
+  // Cria a categoria direto no banco (mesma tabela/campos da tela
+  // Categorias) e já deixa selecionada pro lançamento em andamento. `onSalvo`
+  // aqui é o mesmo callback que Painel/Gastos/Receitas passam pra recarregar
+  // tudo em silêncio depois de qualquer ação — reaproveitado tal e qual,
+  // porque ele NÃO fecha o formulário (só quem decide fechar é a função
+  // `salvar` abaixo, chamando `onFechar` explicitamente) — então chamar ele
+  // aqui só atualiza `frentesGasto`/`fontesReceita` (via OwnerView) sem
+  // perder o que já foi preenchido no lançamento.
+  async function criarCategoriaRapida() {
+    setNovaCatErro("");
+    if (!novaCatNome.trim()) { setNovaCatErro("Dê um nome pra categoria."); return; }
+    setNovaCatSalvando(true);
+    try {
+      const base = normalizarChave(novaCatNome);
+      const chavesExistentes = new Set(opcoesCategoria.map((o) => o.chave));
+      let chave = base, n = 2;
+      while (chavesExistentes.has(chave)) { chave = `${base}_${n}`; n++; }
+      const { data: criada, error } = await supabase.from("categorias").insert({
+        familia_id: membroLogado.familia_id, tipo, chave, label: novaCatNome.trim(), cor: novaCatCor.cor, cor_soft: novaCatCor.corSoft, icone: novaCatEmoji,
+      }).select().single();
+      if (error) throw error;
+      if (!criada) throw new Error("A categoria não foi salva — o banco não confirmou a criação.");
+      setCategoria(criada.chave);
+      setCriandoCategoria(false);
+      setNovaCatNome(""); setNovaCatCor(PALETA_CORES[0]); setNovaCatEmoji("⭐");
+      onSalvo && onSalvo();
+    } catch (e) {
+      setNovaCatErro(e.message || "Erro ao criar categoria.");
+    } finally {
+      setNovaCatSalvando(false);
+    }
   }
 
   async function salvar(e) {
@@ -235,7 +284,49 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
               🤖 Deixar o COSMO decidir
             </ChipToggle>
           )}
+          <ChipToggle ativo={criandoCategoria} cor={C.inkMute} onClick={() => { setCriandoCategoria((v) => !v); setNovaCatErro(""); }}>
+            <IconPlus size={13} color={criandoCategoria ? "#fff" : C.inkMute} strokeWidth={2.4} />
+            Nova categoria
+          </ChipToggle>
         </div>
+
+        {/* Criar categoria sem sair do lançamento (leva 13, 26/09/2026) — o
+            tipo (gasto/receita) já é o do lançamento em andamento, só falta
+            nome + cor + emoji. Depois de criada, some daqui e já entra
+            selecionada acima. */}
+        {/* `<div>`, não `<form>`, de propósito: este bloco já vive DENTRO do
+            `<form onSubmit={salvar}>` do lançamento, e HTML não permite
+            formulário aninhado (o navegador ignora a tag interna e o botão
+            "Criar e usar" acabaria submetendo o formulário de FORA, lançando
+            o gasto/receita sem querer). Por isso o botão é type="button" com
+            onClick direto, e o campo de nome intercepta Enter na mão. */}
+        {criandoCategoria && (
+          <div style={{ background: C.bgAlt, borderRadius: 14, padding: "12px 14px", marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+            {novaCatErro && <div style={{ color: C.danger, fontSize: 12.5 }}>{novaCatErro}</div>}
+            <input
+              autoFocus placeholder={`Nome da nova ${tipo === "receita" ? "fonte" : "categoria"} (ex: Pet, Igreja, Escola)`} value={novaCatNome}
+              onChange={(e) => setNovaCatNome(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); criarCategoriaRapida(); } }}
+              style={{ width: "100%", padding: "10px 12px", borderRadius: 9, border: `1px solid ${C.line}`, fontSize: 13.5, boxSizing: "border-box" }}
+            />
+            <div>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Cor</div>
+              <SeletorCor valor={novaCatCor.cor} onEscolher={setNovaCatCor} />
+            </div>
+            <div>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 6 }}>Emoji</div>
+              <SeletorEmoji valor={novaCatEmoji} onEscolher={setNovaCatEmoji} />
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={criarCategoriaRapida} disabled={novaCatSalvando} style={{ padding: "9px 14px", borderRadius: 9, border: "none", background: corTipo, color: "#fff", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                {novaCatSalvando ? "Criando…" : "Criar e usar"}
+              </button>
+              <button type="button" onClick={() => { setCriandoCategoria(false); setNovaCatErro(""); }} style={{ padding: "9px 14px", borderRadius: 9, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 13, cursor: "pointer" }}>
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {(contas.length > 0 || cartoes.length > 0) && (
