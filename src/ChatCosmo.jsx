@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
+import { PALETA_CORES, normalizarChave } from "./CategoriaCampos.jsx";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
@@ -403,6 +404,82 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     }
   }
 
+  // Acha a categoria certa numa lista (frentesGasto OU fontesReceita, já
+  // mescladas por OwnerView.jsx) pra uma proposta de "atualizar/excluir": pelo
+  // mesmo padrão de encontrarAlvo (chave exata primeiro, nome tolerante como
+  // reforço) — a diferença é que aqui o campo se chama `chave` (não `id`) e o
+  // rótulo é `label` (não `nome`), porque é assim que frentesGasto/
+  // fontesReceita guardam cada item.
+  function encontrarCategoria(pool, dados) {
+    if (dados.chave_existente) {
+      const porChave = pool.find((c) => c.chave === dados.chave_existente);
+      if (porChave) return porChave;
+    }
+    const alvo = normalizar(dados.nome_existente || dados.nome);
+    if (!alvo) return null;
+    return (
+      pool.find((c) => normalizar(c.label) === alvo) ||
+      pool.find((c) => normalizar(c.label).includes(alvo) || alvo.includes(normalizar(c.label)))
+    );
+  }
+
+  // Migração 13 ("poder total", 26/09/2026, pedido do Matheus: "Não existe
+  // essa de fixas, elas devem ser editadas ou excluídas também. Poder total
+  // para mim, e o COSMO."): o chat ganha o mesmo poder que a tela Categorias
+  // já tem, sobre QUALQUER categoria — inclusive as 10 da doutrina financeira,
+  // que deixaram de ser fixas (viraram linhas de verdade na tabela
+  // `categorias`, seedadas pela migração 13). Se `alvo.id` vier vazio, é
+  // porque essa família ainda não tem essa linha de verdade (a migração 13
+  // ainda não rodou nela) — nesse caso a categoria continua só um fallback
+  // visual, então avisa em vez de tentar um update/delete que não tem em quê
+  // bater.
+  async function confirmarCategoria(dados) {
+    const pool = dados.tipo === "receita" ? fontesReceita : frentesGasto;
+    if (dados.acao === "criar_categoria") {
+      if (!dados.nome || !dados.nome.trim()) throw new Error("Preciso de um nome pra criar a categoria.");
+      const parecida = encontrarCategoria(pool, { nome: dados.nome });
+      if (parecida) throw new Error(`Já existe uma categoria parecida com "${dados.nome}" (chamada "${parecida.label}") — pra não duplicar, não criei uma nova. Se era pra editar ela, tente de novo pedindo pro COSMO "editar" em vez de "criar".`);
+      const base = normalizarChave(dados.nome);
+      const chavesExistentes = new Set(pool.map((c) => c.chave));
+      let chave = base, n = 2;
+      while (chavesExistentes.has(chave)) { chave = `${base}_${n}`; n++; }
+      const parCor = PALETA_CORES.find((p) => p.cor.toLowerCase() === String(dados.cor || "").toLowerCase()) || PALETA_CORES[0];
+      const emoji = dados.emoji || "⭐";
+      const { data, error } = await supabase.from("categorias").insert({
+        familia_id: membro.familia_id, tipo: dados.tipo, chave, label: dados.nome.trim(), cor: parCor.cor, cor_soft: parCor.corSoft, icone: emoji,
+      }).select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("A categoria não foi salva — o banco não confirmou a criação.");
+      return `Categoria criada: ${dados.nome.trim()}`;
+    } else if (dados.acao === "atualizar_categoria") {
+      const alvo = encontrarCategoria(pool, dados);
+      if (!alvo) throw new Error(`Não encontrei a categoria "${dados.nome_existente || dados.nome}" pra atualizar — confira na aba Categorias se o nome bate.`);
+      if (!alvo.id) throw new Error(`A categoria "${alvo.label}" ainda não pode ser editada por aqui — falta rodar a migração 13 no banco desta família.`);
+      const patch = {};
+      if (dados.nome && dados.nome.trim()) patch.label = dados.nome.trim();
+      if (dados.cor) {
+        const parCor = PALETA_CORES.find((p) => p.cor.toLowerCase() === String(dados.cor).toLowerCase());
+        patch.cor = parCor ? parCor.cor : dados.cor;
+        patch.cor_soft = parCor ? parCor.corSoft : alvo.corSoft;
+      }
+      if (dados.emoji) patch.icone = dados.emoji;
+      if (Object.keys(patch).length === 0) throw new Error(`Não veio nada pra mudar na categoria "${alvo.label}".`);
+      const { data, error } = await supabase.from("categorias").update(patch).eq("id", alvo.id).select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`A categoria "${alvo.label}" não foi atualizada — o banco não confirmou nenhuma alteração (0 linhas afetadas).`);
+      return patch.label ? `Categoria atualizada: ${alvo.label} → ${patch.label}` : `Categoria atualizada: ${alvo.label}`;
+    } else if (dados.acao === "excluir_categoria") {
+      const alvo = encontrarCategoria(pool, dados);
+      if (!alvo) throw new Error(`Não encontrei a categoria "${dados.nome_existente || dados.nome}" pra excluir — confira na aba Categorias se o nome bate.`);
+      if (!alvo.id) throw new Error(`A categoria "${alvo.label}" ainda não pode ser excluída por aqui — falta rodar a migração 13 no banco desta família.`);
+      const { error } = await supabase.from("categorias").delete().eq("id", alvo.id);
+      if (error) throw error;
+      return `Categoria excluída: ${alvo.label}`;
+    } else {
+      throw new Error("Ação desconhecida na proposta.");
+    }
+  }
+
   // Devolve um texto descrevendo exatamente o que aconteceu (criou ou
   // atualizou o quê, com qual valor) — é esse texto que fica gravado em
   // `confirmadas` no lugar de um `true` genérico, pra quem olha o chat depois
@@ -411,6 +488,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   // real do "confirmei e não mudou nada" — ver comentários acima).
   async function confirmarUma(proposta) {
     if (proposta.natureza === "lancamento") return await confirmarLancamento(proposta.dados);
+    if (proposta.natureza === "categoria") return await confirmarCategoria(proposta.dados);
     return await confirmarContaOuCartao(proposta.dados);
   }
 
@@ -551,9 +629,9 @@ function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmar
             const texto = (typeof confirmada === "object" && confirmada.texto) ? confirmada.texto : (proposta.natureza === "lancamento" ? "Lançado" : "Salvo");
             return <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {texto}</div>;
           }
-          return proposta.natureza === "lancamento"
-            ? <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />
-            : <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          if (proposta.natureza === "lancamento") return <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          if (proposta.natureza === "categoria") return <CardPropostaCategoria key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          return <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
         })}
         {propostas.length > 1 && pendentes === 0 && (
           <div style={{ fontSize: 11.5, fontWeight: 800, color: C.greenTextAlt, background: C.greenBg || "rgba(0,0,0,0.03)", borderRadius: 10, padding: "8px 12px" }}>
@@ -614,6 +692,34 @@ function CardPropostaContaOuCartao({ dados, onConfirmar }) {
       {ehCartao && dados.dia_vencimento != null && <Linha label="Vencimento" valor={`dia ${dados.dia_vencimento}`} />}
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar e salvar</button>
+      </div>
+    </div>
+  );
+}
+
+const ROTULO_ACAO_CATEGORIA = {
+  criar_categoria: "Nova categoria",
+  atualizar_categoria: "Editar categoria",
+  excluir_categoria: "Excluir categoria",
+};
+
+function CardPropostaCategoria({ dados, onConfirmar }) {
+  const excluindo = dados.acao === "excluir_categoria";
+  return (
+    <div style={{ background: "#fff", border: `1.5px solid ${C.accentSoft}`, borderRadius: 16, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase" }}>{ROTULO_ACAO_CATEGORIA[dados.acao] || "Proposta"}</span>
+        {dados.emoji && <span style={{ fontSize: 18 }}>{dados.emoji}</span>}
+      </div>
+      <div style={{ height: 1, background: C.line }} />
+      <Linha label="Categoria" valor={dados.nome || dados.nome_existente || dados.chave_existente} />
+      {dados.nome_existente && dados.nome && dados.nome_existente !== dados.nome && <Linha label="Nome atual" valor={dados.nome_existente} />}
+      <Linha label="Tipo" valor={dados.tipo === "receita" ? "Receita (fonte)" : "Gasto (frente)"} />
+      {dados.cor && <Linha label="Cor" valor={dados.cor} />}
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={onConfirmar} style={{ flex: 1, background: excluindo ? (C.danger || "#E24141") : C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+          {excluindo ? "Confirmar exclusão" : "Confirmar e salvar"}
+        </button>
       </div>
     </div>
   );

@@ -4,12 +4,17 @@ import { C, moeda, mesAtualISO, nomeMes, SEM_CATEGORIA } from "./theme.js";
 import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./CategoriaCampos.jsx";
 
 // Categorias personalizadas — migração 10 ("Criar categorias, isso é
-// essencial, temos categorias limitadas", 16/09/2026). As 6 frentes de gasto
-// e 4 fontes de receita da doutrina financeira do COSMO (theme.js) continuam
-// fixas e não aparecem aqui pra editar/excluir — esta tela é só pras
-// categorias que a PRÓPRIA família cria, com nome + cor + ícone escolhidos
-// por ela. Disponível pros dois papéis, sem distinção (mesma decisão do
-// "editar tudo").
+// essencial, temos categorias limitadas", 16/09/2026); migração 13 ("poder
+// total", 26/09/2026, pedido do Matheus: "Não existe essa de fixas, elas
+// devem ser editadas ou excluídas também. Poder total para mim, e o
+// COSMO."). As 6 frentes de gasto e 4 fontes de receita da doutrina
+// financeira do COSMO (constantes em theme.js, usadas só como fallback
+// visual) agora também têm uma linha de verdade na tabela `categorias` pra
+// toda família (migração 13) — então esta tela trata TODAS as categorias do
+// mesmo jeito, sem distinção de "fixa": qualquer uma pode ser editada ou
+// excluída, por qualquer um dos dois papéis (mesma decisão do "editar
+// tudo"). O selo "fixa" só aparece como fallback, pra uma família muito
+// antiga cujo backfill da migração 13 não tenha rodado ainda.
 //
 // Decisão de design: depois de criada, `tipo` e `chave` de uma categoria não
 // mudam mais (só label/cor/icone) — lançamentos já feitos guardam a CHAVE, e
@@ -67,7 +72,7 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
         />
       </div>
       <div style={{ fontSize: 12, color: C.inkFaint, marginBottom: 16, lineHeight: 1.5 }}>
-        Todas as categorias — as fixas da doutrina financeira do COSMO e as que vocês dois criaram — com o total lançado em cada uma em {nomeMes(mes)}. Só as personalizadas podem ser editadas ou excluídas; a opção de criar uma nova também aparece direto ao lançar um gasto ou receita.
+        Todas as categorias — as da doutrina financeira do COSMO e as que vocês dois criaram — com o total lançado em cada uma em {nomeMes(mes)}. Todas podem ser editadas ou excluídas, por qualquer um dos dois ou pelo COSMO no chat; a opção de criar uma nova também aparece direto ao lançar um gasto ou receita.
       </div>
 
       <PainelCategorizacao
@@ -107,10 +112,13 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
 }
 
 // `item` já vem pronto de OwnerView.jsx (frentesGasto/fontesReceita
-// mesclados) — tanto pras fixas quanto pras personalizadas, sempre com
-// `Icone` (componente) OU `emoji` (string) resolvido. `podeMexer` só é true
-// pras personalizadas (têm uma linha de verdade na tabela `categorias` pra
-// editar/excluir); as fixas mostram um selo "fixa" no lugar dos botões.
+// mesclados) — sempre com `Icone` (componente) OU `emoji` (string)
+// resolvido. `podeMexer` é true sempre que existe uma linha de verdade na
+// tabela `categorias` pra editar/excluir — desde a migração 13 isso inclui
+// as 10 categorias da doutrina também. Só mostra o selo "fixa" no lugar dos
+// botões, como último recurso, quando NENHUMA categoria de verdade daquele
+// tipo existe ainda (família cujo backfill da migração 13 não rodou, ou o
+// extremo de já ter excluído todas as opções daquele tipo).
 function ItemCategoria({ item, total, podeMexer, onEditar, onExcluir }) {
   const Icone = item.Icone;
   return (

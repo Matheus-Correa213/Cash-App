@@ -146,32 +146,44 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   const nomePorMembroId = useMemo(() => Object.fromEntries(membros.map((m) => [m.id, m.nome])), [membros]);
 
   // frentesGasto/fontesReceita (migração 10, categorias personalizadas,
-  // 16/09/2026): mescla as categorias FIXAS da doutrina financeira do COSMO
-  // (theme.js) com as que a própria família criou (tabela `categorias`) —
-  // cada item já sai com `Icone` (componente React, categorias fixas ou
-  // antigas) OU `emoji` (string, categorias novas — migração 12, 25/09/2026:
-  // emoji substituiu a galeria de ícones) já resolvido, pra quem usa essas
-  // listas (Gastos/Receitas/NovoLancamento/ImportarArquivo/ChatCosmo) nunca
-  // precisar saber a diferença entre uma fixa e uma personalizada, nem entre
-  // uma personalizada antiga (ícone) e uma nova (emoji).
+  // 16/09/2026; migração 13, "poder total", 26/09/2026, pedido do Matheus:
+  // "Não existe essa de fixas, elas devem ser editadas ou excluídas também.
+  // Poder total para mim, e o COSMO."): agora que a migração 13 seeda as 10
+  // categorias da doutrina financeira do COSMO como linhas DE VERDADE na
+  // tabela `categorias` (pra toda família, novas e antigas), essas listas
+  // passam a confiar 100% na tabela — nada de mesclar com as constantes
+  // hard-coded FRENTES_GASTO/FONTES_RECEITA (theme.js) por cima. Isso é o que
+  // torna a exclusão REAL: excluir uma dessas categorias faz ela sumir da
+  // lista de vez, exatamente como já acontecia com qualquer personalizada —
+  // os lançamentos antigos que usam a chave excluída continuam existindo, só
+  // caem no mesmo "rótulo cru + cor cinza" que Gastos/Receitas/Planejamento
+  // já usam pra qualquer chave que não bate com nada na lista (nada novo:
+  // sempre foi assim pra uma personalizada excluída).
+  //
+  // As constantes de theme.js só entram como ÚLTIMO RECURSO — se não existir
+  // NENHUMA categoria de verdade daquele tipo (família ainda não rodou a
+  // migração 13, ou o extremo de excluir todas as opções de um tipo) — pra
+  // nunca deixar o seletor de categoria de Novo lançamento completamente
+  // vazio. Assim que existir QUALQUER linha real daquele tipo, esse
+  // fallback não entra mais.
   const frentesGasto = useMemo(() => {
-    const fixas = FRENTES_GASTO.map((f) => ({ ...f, Icone: ICONE_FRENTE_GASTO[f.chave] || IconStar, emoji: null, personalizada: false }));
-    const extras = categorias.filter((c) => c.tipo === "gasto").map((c) => ({
+    const reais = categorias.filter((c) => c.tipo === "gasto").map((c) => ({
       chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft, corTexto: c.cor,
       ...resolverIconeCategoria(c.icone),
       personalizada: true, id: c.id,
     }));
-    return [...fixas, ...extras];
+    if (reais.length > 0) return reais;
+    return FRENTES_GASTO.map((f) => ({ ...f, Icone: ICONE_FRENTE_GASTO[f.chave] || IconStar, emoji: null, personalizada: false, id: null }));
   }, [categorias]);
 
   const fontesReceita = useMemo(() => {
-    const fixas = FONTES_RECEITA.map((f) => ({ ...f, Icone: ICONE_FONTE_RECEITA[f.chave] || IconStar, emoji: null, personalizada: false }));
-    const extras = categorias.filter((c) => c.tipo === "receita").map((c) => ({
+    const reais = categorias.filter((c) => c.tipo === "receita").map((c) => ({
       chave: c.chave, label: c.label, cor: c.cor, corSoft: c.cor_soft,
       ...resolverIconeCategoria(c.icone),
       personalizada: true, id: c.id,
     }));
-    return [...fixas, ...extras];
+    if (reais.length > 0) return reais;
+    return FONTES_RECEITA.map((f) => ({ ...f, Icone: ICONE_FONTE_RECEITA[f.chave] || IconStar, emoji: null, personalizada: false, id: null }));
   }, [categorias]);
 
   // O seletor "lançar em nome de outro membro" (dentro de NovoLancamento) só

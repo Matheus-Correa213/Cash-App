@@ -278,6 +278,26 @@ begin
       '{"ver_saldo_geral": true, "ver_gastos_dono": true, "ver_resumo_categorias": true}'::jsonb
     )
     returning * into v_membro;
+
+  -- Migração 13 (26/09/2026, "poder total" sobre categorias): as 6 frentes
+  -- de gasto e as 4 fontes de receita da doutrina financeira do COSMO já
+  -- nascem como linhas de verdade na tabela `categorias` — editáveis e
+  -- excluíveis desde o primeiro dia, sem distinção de "fixa" nenhuma. Ver
+  -- supabase-migracao-13-categorias-poder-total.sql para o backfill das
+  -- famílias que já existiam antes desta migração.
+  insert into categorias (familia_id, tipo, chave, label, cor, cor_soft, icone)
+  values
+    (v_familia_id, 'gasto',   'dia_a_dia',    'Dia a dia',              '#0469FB', '#E7F0FE', '🛒'),
+    (v_familia_id, 'gasto',   'recorrentes',  'Recorrentes',            '#7C5CFC', '#EFEAFE', '🔁'),
+    (v_familia_id, 'gasto',   'reserva',      'Reserva/Investimentos',  '#E3A400', '#FFF6DA', '💰'),
+    (v_familia_id, 'gasto',   'projetos',     'Projetos',               '#0EA5A0', '#E1F7F6', '📁'),
+    (v_familia_id, 'gasto',   'casa_familia', 'Casa/família',           '#E85D8A', '#FDE9F0', '🏠'),
+    (v_familia_id, 'gasto',   'saude',        'Saúde',                  '#F5934B', '#FFF1E4', '💊'),
+    (v_familia_id, 'receita', 'trabalho',     'Trabalho principal',     '#0469FB', '#E7F0FE', '💼'),
+    (v_familia_id, 'receita', 'correa_books', 'Corrêa Books',           '#E85D8A', '#FDE9F0', '📚'),
+    (v_familia_id, 'receita', 'freelas',      'Freelas',                '#E3A400', '#FFF6DA', '⚡'),
+    (v_familia_id, 'receita', 'outros',       'Outros',                 '#9AA2B5', '#EEF0F6', '⭐');
+
   return v_membro;
 end;
 $$;

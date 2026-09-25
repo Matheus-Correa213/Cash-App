@@ -78,6 +78,23 @@ function montarFerramentas(categoriasResumo) {
     },
   },
   {
+    name: "propor_categoria",
+    description: "Monta uma PROPOSTA pra criar, editar ou excluir uma categoria (frente de gasto ou fonte de receita) — use quando o usuário pedir pra criar uma categoria nova, renomear/trocar cor ou emoji de uma que já existe, ou excluir uma. Isso vale pra QUALQUER categoria, inclusive as da doutrina financeira do COSMO (dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude, trabalho, correa_books, freelas, outros) — elas não são mais fixas, também podem ser editadas ou excluídas. Não grava nada — só propõe, a pessoa confirma na tela.",
+    input_schema: {
+      type: "object",
+      properties: {
+        acao: { type: "string", enum: ["criar_categoria", "atualizar_categoria", "excluir_categoria"] },
+        tipo: { type: "string", enum: ["gasto", "receita"], description: "Obrigatório sempre — de qual lista (frentes de gasto ou fontes de receita) é essa categoria." },
+        chave_existente: { type: "string", description: "Só pra 'atualizar_categoria'/'excluir_categoria': a chave EXATA da categoria já existente (ex: dia_a_dia, saude, ou a chave de uma personalizada), conforme a lista de categorias que você já viu. É o que o app usa pra achar o registro certo." },
+        nome_existente: { type: "string", description: "Só pra 'atualizar_categoria'/'excluir_categoria': o rótulo da categoria já existente, como referência (o app usa chave_existente pra achar o registro; isto é só pra exibição)." },
+        nome: { type: "string", description: "Nome/rótulo da categoria (novo, ou o nome atualizado). Obrigatório pra criar_categoria e atualizar_categoria." },
+        cor: { type: "string", description: "Cor em hexadecimal (ex: #0469FB), se o usuário pedir uma cor específica. Deixe vazio para o app escolher uma cor padrão." },
+        emoji: { type: "string", description: "Um emoji pra representar a categoria, se o usuário sugerir um ou for óbvio pelo nome (ex: 🛒 pra mercado). Deixe vazio para o app escolher um emoji padrão." },
+      },
+      required: ["acao", "tipo"],
+    },
+  },
+  {
     name: "resumo_periodo",
     description: "Consulta os lançamentos reais da família num período pra responder perguntas analíticas (quanto gastei em X, como estão as finanças, etc). Use antes de responder qualquer pergunta sobre números reais — nunca invente valores.",
     input_schema: {
@@ -120,6 +137,7 @@ Categorias de receita desta família (fixas + personalizadas): ${listaCategorias
 
 Regras importantes:
 - Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Se ele mencionar com qual conta ou cartão pagou (ou for óbvio pelo contexto), inclua também o pago_com_id copiado da lista de contas/cartões acima — sem isso, o app pode não conseguir identificar a conta/cartão certo só pelo nome, e o lançamento fica sem tirar de lugar nenhum. Nunca diga que "já lançou" — apenas proponha.
+- Se o usuário pedir pra criar, renomear, trocar cor/emoji, ou excluir uma categoria: chame propor_categoria. Isso vale pra QUALQUER categoria — as 10 da doutrina financeira listadas acima não são fixas, também podem ser editadas ou excluídas, por você ou pela pessoa direto na tela "Categorias". Pra editar/excluir uma que já existe, sempre inclua chave_existente copiada EXATAMENTE da lista de categorias acima (é assim que o app acha o registro certo — não é por nome).
 - Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só. NUNCA pule nenhum item da lista que o usuário mandou, mesmo que sejam 5, 10 ou mais — cada conta/cartão mencionado vira uma chamada de ferramenta própria.
 - Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome, mesmo que o usuário não escreva exatamente igual — "Nubank" no texto do usuário deve casar com "Nubank Croma" da lista, por exemplo) — se já existe algo parecido, use 'atualizar_*' e SEMPRE inclua id_existente copiado EXATAMENTE do campo [id: ...] correspondente da lista acima (é assim que o app encontra o registro certo — não é feito por nome). Só use 'criar_*' quando realmente não existir nada parecido na lista.
 - Sobre cartão de crédito: se o usuário mandar "limite total", "limite disponível" e "fatura atual" juntos, use limite pro limite total, fatura_atual pro valor da fatura, e limite_disponivel pro valor disponível — os três são úteis e devem ser incluídos quando informados. NÃO assuma que "disponível" é sempre igual a "limite menos fatura atual": quando o usuário tem compras parceladas em andamento, o disponível real é menor do que essa conta simples, porque o limite já foi consumido pelas parcelas futuras mesmo elas ainda não aparecendo na fatura — é exatamente por isso que limite_disponivel existe como campo próprio, pra o app calcular essa diferença.
@@ -178,7 +196,8 @@ export default async function handler(req, res) {
 
   const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo);
   const ferramentas = montarFerramentas(categoriasResumo);
-  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao"]);
+  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria"]);
+  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria" };
 
   try {
     let propostas = [];
@@ -214,7 +233,7 @@ export default async function handler(req, res) {
       const blocosProposta = blocosFerramenta.filter((b) => NOMES_FERRAMENTAS_PROPOSTA.has(b.name));
       if (blocosProposta.length > 0) {
         propostas = blocosProposta.map((b) => ({
-          natureza: b.name === "propor_lancamento" ? "lancamento" : "conta_ou_cartao",
+          natureza: NATUREZA_POR_FERRAMENTA[b.name] || "lancamento",
           dados: b.input,
         }));
         textoFinal = blocosTexto || (propostas.length > 1 ? `Preparei ${propostas.length} propostas — confere pra mim?` : "Confere pra mim?");
