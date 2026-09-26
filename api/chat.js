@@ -96,7 +96,7 @@ function montarFerramentas(categoriasResumo) {
   },
   {
     name: "resumo_periodo",
-    description: "Consulta os lançamentos reais da família num período pra responder perguntas analíticas (quanto gastei em X, como estão as finanças, etc). Use antes de responder qualquer pergunta sobre números reais — nunca invente valores.",
+    description: "Consulta os lançamentos reais da família num período pra responder perguntas analíticas (quanto gastei em X, como estão as finanças, etc). Use antes de responder qualquer pergunta sobre números reais — nunca invente valores. Devolve só TOTAIS agregados (não lançamento por lançamento) — pra ver o detalhe de cada lançamento individual (descrição, valor), use listar_lancamentos em vez desta.",
     input_schema: {
       type: "object",
       properties: {
@@ -104,6 +104,33 @@ function montarFerramentas(categoriasResumo) {
         tipo: { type: "string", enum: ["gasto", "receita", "ambos"] },
         dias: { type: "number", description: "Quantos dias pra trás considerar, a partir de hoje. Padrão 30." },
       },
+    },
+  },
+  {
+    name: "listar_lancamentos",
+    description: "Devolve a lista de lançamentos reais (id, descrição, valor, data, categoria) de um período — use quando precisar ver o DETALHE individual de cada lançamento, não só o total. Isso é o caso, por exemplo, quando o usuário quer reorganizar/mover lançamentos que estão numa categoria genérica pra categorias mais específicas (ex: separar 'mercado' e 'combustível' de dentro de 'Dia a dia'): chame isto filtrando pela categoria genérica, olhe a descrição de cada lançamento devolvido, decida qual categoria nova combina com cada um, e proponha a mudança com propor_editar_lancamento — um por lançamento que precisa mudar. NÃO chame isto pra perguntas simples de total (ex: 'quanto eu gastei em X') — aí use resumo_periodo, que é mais leve.",
+    input_schema: {
+      type: "object",
+      properties: {
+        categoria: { type: "string", description: "Filtrar por uma categoria/frente específica (chave exata). Deixe vazio pra trazer de todas as categorias." },
+        tipo: { type: "string", enum: ["gasto", "receita", "ambos"] },
+        dias: { type: "number", description: "Quantos dias pra trás considerar, a partir de hoje. Padrão 90 (mais generoso que resumo_periodo — reorganizar costuma envolver lançamentos de alguns meses atrás)." },
+      },
+    },
+  },
+  {
+    name: "propor_editar_lancamento",
+    description: "Monta uma PROPOSTA pra mudar a categoria de um lançamento JÁ EXISTENTE (não cria um novo) — use depois de ver o lançamento via listar_lancamentos (ou resumo_periodo/a conversa) e decidir que ele deveria estar em outra categoria. Se o usuário quiser reorganizar vários lançamentos de uma vez, chame esta ferramenta VÁRIAS VEZES em paralelo, uma por lançamento — não junte tudo numa proposta só. Só muda a categoria; não serve pra corrigir valor/descrição/data (isso ainda só é feito pela tela, em Gastos/Receitas → editar). Não grava nada — só propõe, a pessoa confirma na tela (ou confirma todas de uma vez, se vierem várias).",
+    input_schema: {
+      type: "object",
+      properties: {
+        id: { type: "string", description: "O id EXATO do lançamento (copiado da lista devolvida por listar_lancamentos) — é isso que o app usa pra achar o registro certo, não a descrição." },
+        categoria_nova: { type: "string", description: "A chave EXATA da categoria nova (de gasto ou de receita, conforme o tipo do lançamento) — use a lista de categorias desta família." },
+        categoria_atual: { type: "string", description: "A chave da categoria atual dele, como referência (só pra mostrar 'de X pra Y' na tela de confirmação — o app usa 'id' pra achar o registro, não isto)." },
+        descricao: { type: "string", description: "A descrição do lançamento, como referência (só pra exibição)." },
+        valor: { type: "number", description: "O valor do lançamento, como referência (só pra exibição)." },
+      },
+      required: ["id", "categoria_nova"],
     },
   },
   ];
@@ -143,6 +170,7 @@ Regras importantes:
 - Sobre cartão de crédito: se o usuário mandar "limite total", "limite disponível" e "fatura atual" juntos, use limite pro limite total, fatura_atual pro valor da fatura, e limite_disponivel pro valor disponível — os três são úteis e devem ser incluídos quando informados. NÃO assuma que "disponível" é sempre igual a "limite menos fatura atual": quando o usuário tem compras parceladas em andamento, o disponível real é menor do que essa conta simples, porque o limite já foi consumido pelas parcelas futuras mesmo elas ainda não aparecendo na fatura — é exatamente por isso que limite_disponivel existe como campo próprio, pra o app calcular essa diferença.
 - Cartão de crédito não é uma conta de subtração simples: uma compra parcelada (ex: "comprei um item de 6000 em 10x") consome o LIMITE inteiro na hora da compra, mas só uma parcela entra na fatura de cada mês. Isso ainda não pode ser lançado pelo chat — só pela tela "Novo lançamento" no app, que já sabe dividir e espalhar as parcelas certas pelos meses. Se o usuário descrever uma compra parcelada, não use propor_lancamento nem fatura_atual pra isso — explique que esse tipo de lançamento precisa ser feito em "Novo lançamento" no app.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
+- Se o usuário quiser reorganizar/revisar lançamentos que já foram feitos — por exemplo, separar compras de "mercado" e "combustível" que hoje estão misturadas dentro de "Dia a dia" — chame listar_lancamentos filtrando pela categoria genérica (não peça isso de cara em toda pergunta, só quando for realmente necessário ver a descrição individual de cada lançamento). Depois de ver a lista, decida a categoria nova de cada um pela descrição e chame propor_editar_lancamento uma vez pra CADA lançamento que deve mudar, em paralelo (mesma lógica de propor_conta_ou_cartao) — nunca invente ou edite um lançamento que você não viu na lista.
 - Seja direto, caloroso e breve — poucas frases, sem enrolação.
 - Nunca dê conselho financeiro genérico não pedido; foque em ajudar com o que foi perguntado.`;
 }
@@ -182,6 +210,23 @@ export default async function handler(req, res) {
       const totalReceita = (data || []).filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0);
       return { periodo_dias: dias, total_gasto: totalGasto, total_receita: totalReceita, quantidade_lancamentos: (data || []).length };
     }
+    if (nome === "listar_lancamentos") {
+      const LIMITE = 120;
+      const dias = entrada.dias || 90;
+      const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      let query = supabase.from("lancamentos").select("id, tipo, categoria, descricao, valor, data").gte("data", desde).order("data", { ascending: false }).limit(LIMITE);
+      if (entrada.categoria) query = query.eq("categoria", entrada.categoria);
+      if (entrada.tipo && entrada.tipo !== "ambos") query = query.eq("tipo", entrada.tipo);
+      const { data, error } = await query;
+      if (error) return { erro: error.message };
+      const lista = (data || []).map((l) => ({ id: l.id, tipo: l.tipo, categoria: l.categoria, descricao: l.descricao || "(sem descrição)", valor: Number(l.valor), data: l.data }));
+      const resultado = { lancamentos: lista, quantidade: lista.length };
+      // Aviso explícito se bateu no teto — pra o modelo não achar, por engano,
+      // que viu TODOS os lançamentos do período quando na verdade só viu os
+      // 120 mais recentes.
+      if (lista.length >= LIMITE) resultado.aviso = `Lista limitada aos ${LIMITE} lançamentos mais recentes do período — pode haver mais além destes.`;
+      return resultado;
+    }
     return { erro: "ferramenta desconhecida" };
   }
 
@@ -196,8 +241,8 @@ export default async function handler(req, res) {
 
   const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo);
   const ferramentas = montarFerramentas(categoriasResumo);
-  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria"]);
-  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria" };
+  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento"]);
+  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento" };
 
   try {
     let propostas = [];

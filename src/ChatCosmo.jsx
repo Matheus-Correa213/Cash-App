@@ -480,6 +480,33 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     }
   }
 
+  // Leva 15 (26/09/2026, pedido do Matheus: o COSMO no chat só via TOTAIS por
+  // categoria — resumo_periodo — e não conseguia ajudar a reorganizar
+  // lançamentos já feitos entre categorias porque não enxergava a descrição
+  // de cada um. `api/chat.js` ganhou `listar_lancamentos` (ferramenta de
+  // CONSULTA, executada no servidor, só chamada quando o modelo realmente
+  // precisa ver o detalhe — não em toda pergunta) e esta função confirma a
+  // proposta que nasce depois disso: mudar a categoria de um lançamento que
+  // JÁ EXISTE (nunca cria nem apaga nada, só corrige `categoria`). O `id` vem
+  // sempre de uma linha que o modelo realmente viu via listar_lancamentos —
+  // o app não confia em nome/descrição pra achar o registro aqui, só no id
+  // exato, exatamente como qualquer 'atualizar_*' de conta/cartão/categoria.
+  async function confirmarEditarLancamento(dados) {
+    if (!dados.id) throw new Error("Não veio o id do lançamento — não dá pra saber qual editar.");
+    if (!dados.categoria_nova) throw new Error("Não veio a categoria nova pra esse lançamento.");
+    // `.select()` de propósito, mesmo cuidado de sempre com "0 linhas
+    // afetadas": um id que não existe mais, ou um membro restrito tentando
+    // mudar um lançamento que não é dele (RLS: "dono edita tudo, membro edita
+    // só o próprio"), retorna sucesso com 0 linhas em vez de erro.
+    const { data, error } = await supabase.from("lancamentos").update({ categoria: dados.categoria_nova }).eq("id", dados.id).select();
+    if (error) throw error;
+    if (!data || data.length === 0) throw new Error("Este lançamento não foi atualizado — o banco não confirmou nenhuma alteração (0 linhas afetadas; se não for seu, só o dono pode mover lançamentos de outra pessoa).");
+    const pool = data[0].tipo === "receita" ? fontesReceita : frentesGasto;
+    const infoNova = pool.find((c) => c.chave === dados.categoria_nova);
+    const rotuloDescricao = dados.descricao ? `"${dados.descricao}"` : `lançamento de ${moeda(Number(data[0].valor))}`;
+    return `${rotuloDescricao} movido pra ${infoNova?.label || dados.categoria_nova}`;
+  }
+
   // Devolve um texto descrevendo exatamente o que aconteceu (criou ou
   // atualizou o quê, com qual valor) — é esse texto que fica gravado em
   // `confirmadas` no lugar de um `true` genérico, pra quem olha o chat depois
@@ -489,6 +516,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   async function confirmarUma(proposta) {
     if (proposta.natureza === "lancamento") return await confirmarLancamento(proposta.dados);
     if (proposta.natureza === "categoria") return await confirmarCategoria(proposta.dados);
+    if (proposta.natureza === "editar_lancamento") return await confirmarEditarLancamento(proposta.dados);
     return await confirmarContaOuCartao(proposta.dados);
   }
 
@@ -631,6 +659,7 @@ function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmar
           }
           if (proposta.natureza === "lancamento") return <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "categoria") return <CardPropostaCategoria key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          if (proposta.natureza === "editar_lancamento") return <CardPropostaEditarLancamento key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
           return <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
         })}
         {propostas.length > 1 && pendentes === 0 && (
@@ -720,6 +749,32 @@ function CardPropostaCategoria({ dados, onConfirmar }) {
         <button onClick={onConfirmar} style={{ flex: 1, background: excluindo ? (C.danger || "#E24141") : C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
           {excluindo ? "Confirmar exclusão" : "Confirmar e salvar"}
         </button>
+      </div>
+    </div>
+  );
+}
+
+// Leva 15 — proposta de mover um lançamento JÁ EXISTENTE de categoria (nasce
+// depois do COSMO usar listar_lancamentos pra ver o detalhe de cada um e
+// decidir quais devem mudar). `frentesGasto`/`fontesReceita` resolvem o
+// RÓTULO das chaves (o modelo manda a chave crua em `categoria_atual`/
+// `categoria_nova`) — procura nas duas listas porque o card não sabe de
+// antemão se é gasto ou receita antes de achar a categoria nova.
+function CardPropostaEditarLancamento({ dados, frentesGasto, fontesReceita, onConfirmar }) {
+  const todasCategorias = [...frentesGasto, ...fontesReceita];
+  const rotulo = (chave) => todasCategorias.find((c) => c.chave === chave)?.label || chave || "?";
+  return (
+    <div style={{ background: "#fff", border: `1.5px solid ${C.accentSoft}`, borderRadius: 16, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase" }}>Mover categoria</span>
+        {dados.valor != null && <span style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>{moeda(dados.valor)}</span>}
+      </div>
+      <div style={{ height: 1, background: C.line }} />
+      {dados.descricao && <Linha label="Lançamento" valor={dados.descricao} />}
+      <Linha label="De" valor={rotulo(dados.categoria_atual)} />
+      <Linha label="Para" valor={rotulo(dados.categoria_nova)} />
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar</button>
       </div>
     </div>
   );
