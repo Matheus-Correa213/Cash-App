@@ -2,6 +2,8 @@ import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, moeda, mesAtualISO, nomeMes, SEM_CATEGORIA } from "./theme.js";
 import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./CategoriaCampos.jsx";
+import EditarLancamento from "./EditarLancamento.jsx";
+import { IconChevronDown, IconChevronUp } from "./Icons.jsx";
 
 // Categorias personalizadas — migração 10 ("Criar categorias, isso é
 // essencial, temos categorias limitadas", 16/09/2026); migração 13 ("poder
@@ -21,6 +23,18 @@ import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./Categ
 // deixar mudar o tipo depois criaria uma categoria de gasto que na prática
 // vira receita (ou vice-versa) pros lançamentos antigos, o que não faz
 // sentido nenhum. Pra "trocar de tipo", a família cria uma nova.
+//
+// 16ª leva (26/09/2026): Matheus pediu "poder abrir as categorias e ver os
+// gastos, poder acessar e mudar um gasto de categoria após acessar ele pela
+// aba de categorias" — clicar numa categoria aqui agora expande a lista dos
+// lançamentos dela no mês escolhido (mesma filtragem de `!cartao_id` já usada
+// em `totalPorCategoria`, pra bater com o total mostrado), e cada lançamento
+// tem "editar", que abre o MESMO `EditarLancamento.jsx` já usado em Gastos/
+// Receitas/CartaoDetalhe — então mudar a categoria (ou qualquer outro campo)
+// direto por aqui grava exatamente igual, sem nenhum caminho novo de escrita
+// no banco. Mesma regra de acesso de sempre: quem tem acesso restrito só edita
+// os PRÓPRIOS lançamentos (RLS de UPDATE em `lancamentos` já é assim); o botão
+// "editar" só aparece quando a pessoa pode mesmo editar aquele lançamento.
 
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 18, padding: 18, marginBottom: 16 };
 const h2 = { fontSize: 12, fontWeight: 800, color: C.inkFaint, marginBottom: 12, letterSpacing: "0.04em", textTransform: "uppercase" };
@@ -28,13 +42,19 @@ const input = { width: "100%", padding: "10px 12px", borderRadius: 9, border: `1
 const btn = { padding: "10px 16px", borderRadius: 9, border: "none", background: C.accent, color: "#fff", fontSize: 14, fontWeight: 600, cursor: "pointer" };
 const btnGhost = { padding: "6px 10px", borderRadius: 8, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" };
 
-export default function Categorias({ familiaId, categorias, lancamentos = [], frentesGasto = [], fontesReceita = [], podeEditar = false, familiaInfo, onAtualizado, onVoltar }) {
+export default function Categorias({ familiaId, categorias, lancamentos = [], frentesGasto = [], fontesReceita = [], podeEditar = false, familiaInfo, membro, membros, contas = [], cartoes = [], nomePorMembroId = {}, onAtualizado, onVoltar }) {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
   // Seletor de mês (leva 13, 26/09/2026, pedido do Matheus: "na aba
   // categorias, ter todas, com seus gastos") — mesmo padrão de Gastos/
   // Receitas/Planejamento.
   const [mes, setMes] = useState(mesAtualISO());
+  // Ver/editar os lançamentos de uma categoria direto por aqui (16ª leva,
+  // 26/09/2026) — `categoriaAberta` guarda a chave composta "tipo:chave" da
+  // categoria expandida (null = nenhuma); `editandoLancamentoId` é o
+  // lançamento, dentro dela, aberto pra edição no momento.
+  const [categoriaAberta, setCategoriaAberta] = useState(null);
+  const [editandoLancamentoId, setEditandoLancamentoId] = useState(null);
 
   // Total lançado em cada categoria no mês escolhido. Mesma separação
   // cartão/conta usada em todo o resto do app desde a leva 12 (compra de
@@ -50,6 +70,21 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
       const k = `${l.tipo}:${l.categoria}`;
       mapa[k] = (mapa[k] || 0) + Number(l.valor);
     }
+    return mapa;
+  }, [lancamentos, mes]);
+
+  // Mesmo filtro de cima, mas guardando os lançamentos em si (não só a soma)
+  // — usado pra expandir uma categoria e mostrar/editar cada um (16ª leva).
+  // Ordenados do mais recente pro mais antigo, igual Gastos/Receitas.
+  const lancamentosPorCategoria = useMemo(() => {
+    const mapa = {};
+    for (const l of lancamentos) {
+      if (l.data.slice(0, 7) !== mes) continue;
+      if (l.tipo === "gasto" && l.cartao_id) continue;
+      const k = `${l.tipo}:${l.categoria}`;
+      (mapa[k] = mapa[k] || []).push(l);
+    }
+    for (const k in mapa) mapa[k].sort((a, b) => (a.data < b.data ? 1 : -1));
     return mapa;
   }, [lancamentos, mes]);
 
@@ -84,22 +119,62 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
       <div style={cardStyle}>
         <div style={h2}>Categorias de gasto</div>
         {frentesGasto.map((item) => {
-          const total = totalPorCategoria[`gasto:${item.chave}`] || 0;
+          const chaveComposta = `gasto:${item.chave}`;
+          const total = totalPorCategoria[chaveComposta] || 0;
           const bruta = item.personalizada ? categorias.find((c) => c.id === item.id) : null;
-          return editandoId === item.id
-            ? <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
-            : <ItemCategoria key={item.chave} item={item} total={total} podeMexer={!!bruta} onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)} />;
+          if (editandoId === item.id) {
+            return <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />;
+          }
+          return (
+            <React.Fragment key={item.chave}>
+              <ItemCategoria
+                item={item} total={total} podeMexer={!!bruta}
+                aberta={categoriaAberta === chaveComposta}
+                onToggle={() => setCategoriaAberta(categoriaAberta === chaveComposta ? null : chaveComposta)}
+                onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)}
+              />
+              {categoriaAberta === chaveComposta && (
+                <ListaLancamentosCategoria
+                  lancamentos={lancamentosPorCategoria[chaveComposta] || []}
+                  mes={mes} membro={membro} membros={membros} contas={contas} cartoes={cartoes}
+                  frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
+                  editandoLancamentoId={editandoLancamentoId} setEditandoLancamentoId={setEditandoLancamentoId}
+                  onAtualizado={onAtualizado}
+                />
+              )}
+            </React.Fragment>
+          );
         })}
       </div>
 
       <div style={cardStyle}>
         <div style={h2}>Categorias de receita</div>
         {fontesReceita.map((item) => {
-          const total = totalPorCategoria[`receita:${item.chave}`] || 0;
+          const chaveComposta = `receita:${item.chave}`;
+          const total = totalPorCategoria[chaveComposta] || 0;
           const bruta = item.personalizada ? categorias.find((c) => c.id === item.id) : null;
-          return editandoId === item.id
-            ? <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />
-            : <ItemCategoria key={item.chave} item={item} total={total} podeMexer={!!bruta} onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)} />;
+          if (editandoId === item.id) {
+            return <EditarCategoria key={item.chave} categoria={bruta} onSalvo={() => { setEditandoId(null); onAtualizado(); }} onCancelar={() => setEditandoId(null)} />;
+          }
+          return (
+            <React.Fragment key={item.chave}>
+              <ItemCategoria
+                item={item} total={total} podeMexer={!!bruta}
+                aberta={categoriaAberta === chaveComposta}
+                onToggle={() => setCategoriaAberta(categoriaAberta === chaveComposta ? null : chaveComposta)}
+                onEditar={() => setEditandoId(item.id)} onExcluir={() => bruta && excluir(bruta)}
+              />
+              {categoriaAberta === chaveComposta && (
+                <ListaLancamentosCategoria
+                  lancamentos={lancamentosPorCategoria[chaveComposta] || []}
+                  mes={mes} membro={membro} membros={membros} contas={contas} cartoes={cartoes}
+                  frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
+                  editandoLancamentoId={editandoLancamentoId} setEditandoLancamentoId={setEditandoLancamentoId}
+                  onAtualizado={onAtualizado}
+                />
+              )}
+            </React.Fragment>
+          );
         })}
       </div>
 
@@ -119,10 +194,17 @@ export default function Categorias({ familiaId, categorias, lancamentos = [], fr
 // botões, como último recurso, quando NENHUMA categoria de verdade daquele
 // tipo existe ainda (família cujo backfill da migração 13 não rodou, ou o
 // extremo de já ter excluído todas as opções daquele tipo).
-function ItemCategoria({ item, total, podeMexer, onEditar, onExcluir }) {
+// A partir da 16ª leva, a linha inteira (menos os botões de editar/excluir A
+// CATEGORIA em si) abre/fecha a lista de lançamentos dela no mês — por isso
+// `onToggle` fica no `onClick` da div e os botões próprios chamam
+// `stopPropagation` pra não expandir/recolher junto por engano.
+function ItemCategoria({ item, total, podeMexer, aberta, onToggle, onEditar, onExcluir }) {
   const Icone = item.Icone;
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: `1px solid ${C.line}` }}>
+    <div
+      onClick={onToggle}
+      style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderBottom: aberta ? "none" : `1px solid ${C.line}`, cursor: "pointer" }}
+    >
       <div style={{ width: 34, height: 34, borderRadius: 10, background: item.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         {item.emoji ? <span style={{ fontSize: 16, lineHeight: 1 }}>{item.emoji}</span> : (Icone && <Icone size={16} color="#fff" strokeWidth={2} />)}
       </div>
@@ -130,14 +212,71 @@ function ItemCategoria({ item, total, podeMexer, onEditar, onExcluir }) {
         <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.label}</div>
         <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{total > 0 ? moeda(total) : "sem lançamentos neste mês"}</div>
       </div>
+      {aberta ? <IconChevronUp size={16} color={C.inkFaint} strokeWidth={2} /> : <IconChevronDown size={16} color={C.inkFaint} strokeWidth={2} />}
       {podeMexer ? (
         <>
-          <button style={btnGhost} onClick={onEditar}>editar</button>
-          <button style={btnGhost} onClick={onExcluir}>excluir</button>
+          <button style={btnGhost} onClick={(e) => { e.stopPropagation(); onEditar(); }}>editar</button>
+          <button style={btnGhost} onClick={(e) => { e.stopPropagation(); onExcluir(); }}>excluir</button>
         </>
       ) : (
         <span style={{ fontSize: 10.5, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.03em" }}>fixa</span>
       )}
+    </div>
+  );
+}
+
+// Lista de lançamentos de uma categoria já expandida (16ª leva, 26/09/2026)
+// — clicar numa categoria mostra cada gasto/receita dela no mês escolhido, e
+// "editar" abre o MESMO EditarLancamento.jsx de sempre, que já deixa mudar a
+// categoria (entre outros campos). Mesma regra de acesso de Gastos/Receitas:
+// acesso restrito só edita os PRÓPRIOS lançamentos.
+function ListaLancamentosCategoria({ lancamentos, mes, membro, membros, contas, cartoes, frentesGasto, fontesReceita, nomePorMembroId, editandoLancamentoId, setEditandoLancamentoId, onAtualizado }) {
+  async function excluirLancamento(id) {
+    if (!confirm("Excluir este lançamento?")) return;
+    const { error } = await supabase.from("lancamentos").delete().eq("id", id);
+    if (error) return alert(error.message);
+    onAtualizado();
+  }
+
+  return (
+    <div style={{ padding: "2px 0 10px 46px", borderBottom: `1px solid ${C.line}` }}>
+      {lancamentos.length === 0 && (
+        <div style={{ fontSize: 12, color: C.inkFaint, padding: "8px 0" }}>Nenhum lançamento nesta categoria em {nomeMes(mes)}.</div>
+      )}
+      {lancamentos.map((l) => {
+        // Mesma regra de RLS de sempre: quem tem acesso restrito só
+        // edita/exclui os PRÓPRIOS lançamentos (dono sempre pode).
+        const podeMexer = !membro || membro.papel === "dono" || l.membro_id === membro.id;
+
+        if (editandoLancamentoId === l.id) {
+          return (
+            <div key={l.id} style={{ padding: "10px 0" }}>
+              <EditarLancamento
+                lancamento={l} membros={membros} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+                podeEscolherMembro={!membro || membro.papel === "dono"}
+                onSalvo={() => { setEditandoLancamentoId(null); onAtualizado(); }}
+                onCancelar={() => setEditandoLancamentoId(null)}
+              />
+            </div>
+          );
+        }
+
+        return (
+          <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 0" }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{l.descricao || "(sem descrição)"}</div>
+              <div style={{ fontSize: 11, color: C.inkFaint }}>{nomePorMembroId?.[l.membro_id] ? `${nomePorMembroId[l.membro_id]} · ` : ""}{l.data}</div>
+            </div>
+            <span style={{ fontSize: 13.5, fontWeight: 800, color: l.tipo === "receita" ? C.green : C.coralText }}>{l.tipo === "receita" ? "+" : "-"}{moeda(l.valor)}</span>
+            {podeMexer && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => setEditandoLancamentoId(l.id)} style={{ border: "none", background: "transparent", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>editar</button>
+                <button onClick={() => excluirLancamento(l.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 12, cursor: "pointer" }}>excluir</button>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

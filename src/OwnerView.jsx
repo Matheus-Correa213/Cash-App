@@ -259,7 +259,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
             <TelaMais
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
-              frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+              frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
               lancamentos={lancamentos} planejamentoItens={planejamentoItens} onLancarAgora={lancarAgoraDoPlanejamento}
               familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
@@ -274,7 +274,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, lancamentos, planejamentoItens, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
     return (
@@ -297,13 +297,22 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   // sem distinção. A partir da leva 12 (25/09/2026), esta tela também ganhou
   // o toggle de categorização automática (dono-only, RLS de "familias" já é
   // assim) e o painel de categorização em lote — por isso agora recebe
-  // `podeEditar`, `familiaInfo` e os lançamentos.
+  // `podeEditar`, `familiaInfo` e os lançamentos. A partir da 16ª leva
+  // (26/09/2026), clicar numa categoria expande os lançamentos dela no mês
+  // (editáveis ali mesmo, inclusive a categoria) — por isso ganhou também
+  // `membro`/`membros`/`contas`/`cartoes`/`nomePorMembroId` (já eram props
+  // de TelaMais, ou passaram a ser — `membros` aqui é a lista cheia, igual
+  // já vale pra CartaoDetalhe/GerenciarMembros; quem realmente decide se o
+  // seletor "lançar em nome de outro membro" aparece dentro do
+  // EditarLancamento é o `podeEscolherMembro` que Categorias.jsx calcula,
+  // não a lista em si).
   if (tela === "categorias") {
     return (
       <Categorias
         familiaId={membro.familia_id} categorias={categorias} lancamentos={lancamentos}
         frentesGasto={frentesGasto} fontesReceita={fontesReceita}
         podeEditar={podeEditar} familiaInfo={familiaInfo}
+        membro={membro} membros={membros} contas={contas} cartoes={cartoes} nomePorMembroId={nomePorMembroId}
         onAtualizado={onSalvo} onVoltar={() => setTela(null)}
       />
     );
