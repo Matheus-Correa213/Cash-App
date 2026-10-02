@@ -69,6 +69,9 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // Planejamento.jsx pro raciocínio completo.
   const [planejamentoItens, setPlanejamentoItens] = useState([]);
   const [planejamentoPagamentos, setPlanejamentoPagamentos] = useState([]);
+  // Valor planejado de cada item em cada mês (migração 15) — vale por cima
+  // do valor padrão/aproximado do item.
+  const [planejamentoValoresMes, setPlanejamentoValoresMes] = useState([]);
   // Categorização automática pelo COSMO (migração 12, 25/09/2026) — o
   // registro da própria família (só a coluna categorizacao_automatica
   // interessa aqui; RLS de UPDATE em "familias" já é dono-only, então o
@@ -98,7 +101,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     if (!silencioso) setCarregando(true);
     setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }, { data: planjPag, error: e10 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }, { data: planjPag, error: e10 }, { data: planjVal, error: e11 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
@@ -109,6 +112,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         supabase.from("planejamento_itens").select("*").eq("familia_id", membro.familia_id).order("created_at"),
         supabase.from("familias").select("*").eq("id", membro.familia_id).single(),
         supabase.from("planejamento_pagamentos").select("*").eq("familia_id", membro.familia_id),
+        supabase.from("planejamento_valores_mes").select("*").eq("familia_id", membro.familia_id),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -132,6 +136,10 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       // o planejamento abre normal com tudo "em aberto" e só avisa ao tentar
       // marcar como pago.
       if (e10) console.error("Não consegui carregar os pagamentos do planejamento (rodou a migração 14?):", e10.message);
+      // planejamento_valores_mes (migração 15): mesma lógica — sem a migração,
+      // cada item usa só o valor padrão/aproximado, e o aviso aparece ao
+      // tentar definir o valor de um mês.
+      if (e11) console.error("Não consegui carregar os valores por mês do planejamento (rodou a migração 15?):", e11.message);
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
@@ -141,6 +149,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       setCategorias(cats || []);
       setPlanejamentoItens(planj || []);
       setPlanejamentoPagamentos(planjPag || []);
+      setPlanejamentoValoresMes(planjVal || []);
       setFamiliaInfo(fam || null);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
@@ -211,7 +220,11 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // item ainda em aberto — só preenche o formulário, não lança nada sozinho
   // (ver comentário no state `presetLancamento` acima).
   function lancarAgoraDoPlanejamento(item) {
-    setPresetLancamento({ categoria: item.categoria, valor: item.tipo_valor === "fixo" ? item.valor_fixo : "" });
+    // `valor_preset` vem do Planejamento.jsx: o valor CONFIRMADO do mês (do
+    // mês, ou o fixo) — nunca o aproximado. Sem ele, cai no comportamento
+    // antigo (só valor fixo).
+    const valor = item.valor_preset !== undefined ? item.valor_preset : (item.tipo_valor === "fixo" ? item.valor_fixo : "");
+    setPresetLancamento({ categoria: item.categoria, valor });
     setAba("gastos");
     setTela(null);
   }
@@ -268,7 +281,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
               frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
-              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} onLancarAgora={lancarAgoraDoPlanejamento}
+              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} planejamentoValoresMes={planejamentoValoresMes} onLancarAgora={lancarAgoraDoPlanejamento}
               familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
@@ -282,7 +295,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, planejamentoValoresMes, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
     return (
@@ -332,7 +345,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   if (tela === "planejamento") {
     return (
       <Planejamento
-        familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} frentesGasto={frentesGasto}
+        familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} valoresMes={planejamentoValoresMes} frentesGasto={frentesGasto}
         onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onVoltar={() => setTela(null)}
       />
     );

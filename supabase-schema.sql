@@ -598,6 +598,29 @@ create policy "planejamento pagamentos: familia ve e mexe" on planejamento_pagam
 
 grant select, insert, update, delete on planejamento_pagamentos to authenticated;
 
+-- planejamento_valores_mes (migração 15, 02/10/2026) — valor PLANEJADO de um
+-- item num mês específico. Se existe linha pro (item, mês), ela manda; senão
+-- vale o valor padrão do item (planejamento_itens.valor_fixo: fixo = valor de
+-- sempre; variável = valor aproximado). O valor efetivamente PAGO é outra
+-- coisa: planejamento_pagamentos.valor_pago.
+create table if not exists planejamento_valores_mes (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  item_id uuid not null references planejamento_itens(id) on delete cascade,
+  mes date not null,
+  valor numeric(12,2) not null check (valor >= 0),
+  created_at timestamptz not null default now(),
+  unique (item_id, mes)
+);
+
+alter table planejamento_valores_mes enable row level security;
+
+create policy "planejamento valores mes: familia ve e mexe" on planejamento_valores_mes
+  for all using (familia_id = minha_familia_id())
+  with check (familia_id = minha_familia_id());
+
+grant select, insert, update, delete on planejamento_valores_mes to authenticated;
+
 -- saldos_contas() — ampliado na migração 9 (unificação do acesso da
 -- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido
 -- enquanto só ele via "Contas e cartões"/"Relatórios". Agora que essas
