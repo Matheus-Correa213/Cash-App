@@ -15,6 +15,8 @@
 //   • novo         — não existe no app: vira lançamento (com as parcelas
 //                    futuras, se for parcelada).
 
+import { mesDaFatura } from "./theme.js";
+
 const norm = (s) => String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/g, "");
 
 function addMeses(dataISO, meses) {
@@ -82,7 +84,7 @@ export function classificarTransacoes(transacoes, saldo) {
 
 const iguais = (a, b) => Math.abs(Number(a) - Number(b)) <= 0.01;
 
-export function conciliarFatura({ ofx, existentes, novoGrupoId }) {
+export function conciliarFatura({ ofx, existentes, novoGrupoId, diaFechamento }) {
   const { compras, pagamentos, creditos } = classificarTransacoes(ofx.transacoes, ofx.saldo);
   const livres = new Set(existentes.map((e) => e.id));
   const reservar = (e) => { livres.delete(e.id); return e; };
@@ -101,6 +103,29 @@ export function conciliarFatura({ ofx, existentes, novoGrupoId }) {
       if (doPeriodo(candidato)) return candidato;
     }
     return ofx.fim;
+  };
+
+  // Qual fatura é essa: o mês de fatura do FIM do período do arquivo.
+  const referencia = ofx.fim || [...ofx.transacoes].map((t) => t.data).sort().pop();
+  const mesFatura = referencia ? mesDaFatura(referencia, diaFechamento) : null;
+  const pad2 = (n) => String(n).padStart(2, "0");
+  const diaClamp = (ym, dia) => { const [a, m] = ym.split("-").map(Number); return `${ym}-${pad2(Math.min(dia, new Date(Date.UTC(a, m, 0)).getUTCDate()))}`; };
+  // O ciclo dessa fatura: do dia seguinte ao fechamento anterior até o fechamento.
+  // O banco data as parcelas no PRIMEIRO dia do período (o próprio dia do
+  // fechamento anterior) — e esse dia, pela regra do app, cai no ciclo
+  // anterior. Sem encostar a data no ciclo certo, as parcelas iriam pra fatura
+  // do mês errado (e as futuras, todas deslocadas).
+  const cicloDaFatura = () => {
+    if (!mesFatura || !diaFechamento) return null;
+    const [a, m] = mesFatura.split("-").map(Number);
+    const anterior = new Date(Date.UTC(a, m - 2, 1)).toISOString().slice(0, 7);
+    const inicio = new Date(Date.parse(`${diaClamp(anterior, diaFechamento)}T00:00:00Z`) + 86400000).toISOString().slice(0, 10);
+    return { inicio, fim: diaClamp(mesFatura, diaFechamento) };
+  };
+  const noCiclo = (d) => {
+    const c = cicloDaFatura();
+    if (!c || mesDaFatura(d, diaFechamento) === mesFatura) return d;
+    return d < c.inicio ? c.inicio : d > c.fim ? c.fim : d;
   };
 
   // Passo 1: FITID — a ligação exata, de um OFX anterior.
@@ -145,7 +170,7 @@ export function conciliarFatura({ ofx, existentes, novoGrupoId }) {
     // ou já a do mês da fatura, conforme o banco. A parcela tem que cair
     // DENTRO do período da fatura, senão vai pra fatura errada.
     const deslocada = addMeses(item.data, atual - 1);
-    item.dataFinal = doPeriodo(item.data) ? item.data : doPeriodo(deslocada) ? deslocada : dentroDoPeriodo(item.data);
+    item.dataFinal = noCiclo(doPeriodo(item.data) ? item.data : doPeriodo(deslocada) ? deslocada : dentroDoPeriodo(item.data));
     // Mesma compra já conhecida (outra parcela dela já lançada)? Reaproveita o grupo.
     const irma = existentes.find((e) => e.compra_parcelada_id && e.parcela_total === total && similar(analisarParcela(e.descricao)?.base ?? e.descricao, base));
     item.grupoId = irma?.compra_parcelada_id || novoGrupoId();
@@ -164,7 +189,7 @@ export function conciliarFatura({ ofx, existentes, novoGrupoId }) {
   const soma = (lista) => lista.reduce((s, c) => s + c.valorAbs, 0);
   const por = (status) => itens.filter((i) => i.status === status);
   return {
-    itens, pagamentos, creditos, creditosNovos,
+    itens, pagamentos, creditos, creditosNovos, mesFatura,
     totais: {
       compras: soma(itens), creditos: soma(creditos), pagamentos: soma(pagamentos),
       // o que o banco cobra nessa fatura: compras menos estornos/créditos

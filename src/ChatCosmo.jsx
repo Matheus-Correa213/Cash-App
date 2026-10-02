@@ -157,7 +157,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
       const mesDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const meses = [...new Set([mesFoco, mesDe(agora), mesDe(new Date(agora.getFullYear(), agora.getMonth() + 1, 1))].filter(Boolean))];
       const planejamentoResumo = planejamento
-        ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, frentesGasto, meses })
+        ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, meses })
         : undefined;
       const resp = await fetch("/api/chat", {
         method: "POST",

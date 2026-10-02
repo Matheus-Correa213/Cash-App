@@ -70,11 +70,10 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
         if (/ofx_fitid/i.test(error.message)) throw new Error("Falta rodar a migração 16 no Supabase (coluna ofx_fitid). Rode o SQL e tente de novo.");
         throw error;
       }
-      const resultado = conciliarFatura({ ofx, existentes: existentes || [], novoGrupoId: () => crypto.randomUUID() });
+      const resultado = conciliarFatura({ ofx, existentes: existentes || [], novoGrupoId: () => crypto.randomUUID(), diaFechamento: cartao.dia_fechamento });
 
       // Qual fatura é essa? O mês de fatura do fim do período do arquivo.
-      const referencia = ofx.fim || resultado.itens[0]?.dataFinal;
-      const mesFatura = mesDaFatura(referencia, cartao.dia_fechamento);
+      const mesFatura = resultado.mesFatura;
       // "Recente" = a fatura que acabou de fechar ou a atual. Daí em diante
       // (mês anterior ou mais velho) é histórico: provavelmente já foi paga e
       // nada tem a ver com a "fatura inicial" que está no cartão.
@@ -186,7 +185,10 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
         <div style={{ fontSize: 12.5, fontWeight: 600, color: C.inkMute, marginTop: 4, lineHeight: 1.45 }}>
           No app do banco, abra a fatura do <b>{cartao.nome}</b> e exporte em OFX. O app confere com o que você já lançou e só traz o que falta — nada é gravado antes de você ver e confirmar.
         </div>
-        <input ref={inputRef} type="file" accept=".ofx,.OFX,application/x-ofx,text/plain" hidden onChange={aoEscolher} />
+        {/* SEM o atributo "accept" de propósito: o celular não conhece a extensão .ofx e,
+            com filtro, deixa o arquivo cinza/não selecionável (aconteceu com o OFX do
+            Nubank). Quem decide se é OFX é o leitor, que dá erro claro se não for. */}
+        <input ref={inputRef} type="file" hidden onChange={aoEscolher} />
         <button
           onClick={() => inputRef.current?.click()} disabled={lendo || salvando}
           style={{ marginTop: 12, padding: "12px 16px", borderRadius: 12, border: "none", background: C.purple, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}

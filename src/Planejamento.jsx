@@ -2,7 +2,7 @@ import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, moeda, mesAtualISO, nomeMes } from "./theme.js";
 import { IconCheck, IconClock, IconCosmo } from "./Icons.jsx";
-import { calcularItensDoMes } from "./planejamentoCalculo.js";
+import { itensDoMesComFaturas } from "./planejamentoCalculo.js";
 
 // Planejamento financeiro — pedido do Matheus (leva 12, 25/09/2026): "uma
 // tela de planejamento financeiro, onde eu posso escrever os gastos
@@ -52,7 +52,7 @@ function mensagemTabelaFaltando(error, tabela, migracao, acao) {
   return faltando ? `${acao} — rode a migração ${migracao} no Supabase.` : error?.message || acao;
 }
 
-export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, frentesGasto, onAtualizado, onLancarAgora, onPerguntarCosmo, onVoltar }) {
+export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, frentesGasto, cartoes, lancamentosCartao, onAtualizado, onLancarAgora, onPerguntarCosmo, onAbrirCartao, onVoltar }) {
   const [mes, setMes] = useState(mesAtualISO());
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
@@ -66,7 +66,12 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   const [visao, setVisao] = useState("categoria");
   const [filtroData, setFiltroData] = useState("tudo");
 
-  const itensDoMes = useMemo(() => calcularItensDoMes(itens, pagamentos, valoresMes, mes), [itens, pagamentos, valoresMes, mes]);
+  // Itens digitados + a fatura de cada cartão (calculada ao vivo dos lançamentos
+  // do cartão — ver faturasDeCartaoDoMes em planejamentoCalculo.js).
+  const itensDoMes = useMemo(
+    () => itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes }),
+    [itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes]
+  );
 
   const totalPrevisto = itensDoMes.reduce((s, i) => s + i.previstoSoma, 0);
   const totalPago = itensDoMes.filter((i) => i.pago).reduce((s, i) => s + i.valorReal, 0);
@@ -75,9 +80,12 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   const nSemValor = itensDoMes.filter((i) => !i.pago && i.previsto == null).length;
   const avisosTopo = [];
   if (nAproximados) avisosTopo.push(`inclui ${nAproximados} ${nAproximados === 1 ? "valor aproximado" : "valores aproximados"}`);
+  const nFaturasAbertas = itensDoMes.filter((i) => i.ehCartao && i.aberta).length;
+  if (nFaturasAbertas) avisosTopo.push(`${nFaturasAbertas} ${nFaturasAbertas === 1 ? "fatura de cartão ainda recebendo compras" : "faturas de cartão ainda recebendo compras"}`);
   if (nSemValor) avisosTopo.push(`${nSemValor} ${nSemValor === 1 ? "item sem valor" : "itens sem valor"} (fora da soma)`);
 
   function frenteDe(categoria) {
+    if (categoria === "__cartao__") return { chave: categoria, label: "Cartões de crédito", cor: C.purple, corSoft: C.purpleSoft, Icone: null, emoji: "💳" };
     return frentesGasto.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line, Icone: null, emoji: null };
   }
 
@@ -258,8 +266,38 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     onAtualizado();
   }
 
+  // Fatura de cartão: linha automática (valor ao vivo), sem marcar pago / editar /
+  // excluir — pagar é "Pagar fatura" na tela do cartão, e o valor vem das compras.
+  function linhaCartao(item) {
+    return (
+      <div key={item.id} style={{ borderBottom: `1px solid ${C.line}` }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
+          <div style={{ width: 36, height: 36, borderRadius: 11, background: item.pago ? C.greenSoft : C.purpleSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            {item.pago ? <IconCheck size={16} color={C.green} strokeWidth={2.3} /> : <span style={{ fontSize: 16, lineHeight: 1 }}>💳</span>}
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink, wordBreak: "break-word" }}>{item.nome}</div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+            <span style={{ fontSize: 14, fontWeight: 800, color: item.pago ? C.green : C.ink }}>{moeda(item.previsto)}</span>
+            {item.pago
+              ? <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> paga</span>
+              : item.aberta && <span style={{ fontSize: 10.5, fontWeight: 700, color: C.purple }}>atualizando</span>}
+            {onAbrirCartao && (
+              <button onClick={() => onAbrirCartao(item.cartaoId)} style={{ border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0 }}>
+                {item.pago ? "ver cartão ›" : "ver / pagar ›"}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Uma linha de item — a mesma nas duas visões (por categoria e por vencimento).
   function linha(item) {
+    if (item.ehCartao) return linhaCartao(item);
     if (editandoId === item.id) {
       return (
         <div key={item.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -492,6 +530,17 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
 // Subtítulo de cada linha. A categoria NÃO entra aqui — ela é o cabeçalho do
 // grupo, acima das linhas (ver `grupos` no componente).
 function subtituloDe(item) {
+  if (item.ehCartao) {
+    const p = [];
+    if (item.dia_vencimento) p.push(`vence dia ${item.dia_vencimento}`);
+    if (item.pago) p.push("fatura paga");
+    else if (item.aberta) {
+      const d = item.diasParaFechar;
+      p.push(d === 0 ? "fecha hoje" : d === 1 ? "fecha amanhã" : `fecha dia ${item.diaFechamento}, em ${d} dias`);
+      p.push("sobe a cada compra");
+    } else if (item.fechaEm) p.push(`fechada dia ${item.diaFechamento}`);
+    return p.join(" · ");
+  }
   const partes = [];
   if (item.dia_vencimento) partes.push(`vence dia ${item.dia_vencimento}`);
   if (item.recorrente) partes.push("todo mês");
