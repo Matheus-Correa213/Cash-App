@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, moeda, mesDaFatura, SEM_CATEGORIA } from "./theme.js";
 import { decodificarOFX, lerOFX } from "./ofx.js";
@@ -48,6 +48,18 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
   const [lancarCreditos, setLancarCreditos] = useState(true);
   const [salvando, setSalvando] = useState(false);
   const [concluido, setConcluido] = useState(null);
+  // Mensagens de sucesso/erro ficam fora da vista quando a pessoa está lá embaixo
+  // (no botão "Importar") — então a tela rola até elas assim que aparecem.
+  const sucessoRef = useRef(null);
+  const erroRef = useRef(null);
+  useEffect(() => {
+    if (!erro && !concluido) return;
+    const t = setTimeout(() => {
+      const el = erro ? erroRef.current : sucessoRef.current;
+      el?.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    }, 60);
+    return () => clearTimeout(t);
+  }, [erro, concluido]);
 
   const faturaInicial = Number(cartao.fatura_inicial || 0);
   const limiteExtra = Number(cartao.limite_comprometido_extra || 0);
@@ -110,16 +122,23 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
     setSalvando(true); setErro("");
     try {
       const base = { familia_id: membro.familia_id, membro_id: membro.id, tipo: "gasto", categoria: SEM_CATEGORIA, cartao_id: cartao.id };
+      // IMPORTANTE: num insert em lote, coluna que falta em UMA linha vira NULL (não o
+      // valor padrão da coluna) — e "fatura_paga" não aceita NULL. Foi o que derrubou a
+      // 1ª importação real: as parcelas futuras iam sem esse campo e o banco recusava o
+      // lote inteiro. Por isso TODA linha sai com TODAS as colunas, sempre.
+      const nova = (campos) => ({
+        ...base, ofx_fitid: null, fatura_paga: false, parcela_atual: null, parcela_total: null, compra_parcelada_id: null, ...campos,
+      });
       const linhas = [];
       let somaFuturas = 0;
       for (const i of novos) {
-        linhas.push({
-          ...base, valor: i.valorAbs, descricao: i.descricao, data: i.dataFinal, ofx_fitid: i.fitid, fatura_paga: jaPaga,
+        linhas.push(nova({
+          valor: i.valorAbs, descricao: i.descricao, data: i.dataFinal, ofx_fitid: i.fitid, fatura_paga: jaPaga,
           parcela_atual: i.parcela?.atual ?? null, parcela_total: i.parcela?.total ?? null, compra_parcelada_id: i.parcela ? i.grupoId : null,
-        });
+        }));
         if (lancarFuturas) {
           for (const f of i.futuras) {
-            linhas.push({ ...base, valor: f.valor, descricao: f.descricao, data: f.data, parcela_atual: f.atual, parcela_total: f.total, compra_parcelada_id: i.grupoId });
+            linhas.push(nova({ valor: f.valor, descricao: f.descricao, data: f.data, parcela_atual: f.atual, parcela_total: f.total, compra_parcelada_id: i.grupoId }));
             somaFuturas += f.valor;
           }
         }
@@ -128,13 +147,16 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
       let nCreditos = 0;
       if (lancarCreditos) {
         for (const c of resultado.creditosNovos) {
-          linhas.push({ ...base, valor: -c.valorAbs, descricao: c.memo || "Estorno", data: c.data, ofx_fitid: c.fitid, fatura_paga: jaPaga });
+          linhas.push(nova({ valor: -c.valorAbs, descricao: c.memo || "Estorno", data: c.data, ofx_fitid: c.fitid, fatura_paga: jaPaga }));
           nCreditos++;
         }
       }
       if (linhas.length) {
         const { data, error } = await supabase.from("lancamentos").insert(linhas).select("id");
-        if (error) throw new Error(/ofx_fitid/i.test(error.message) ? "Falta rodar a migração 16 no Supabase (coluna ofx_fitid)." : error.message);
+        if (error) {
+          console.error("Importar OFX — erro do banco:", error);
+          throw new Error(/ofx_fitid/i.test(error.message) ? "Falta rodar a migração 16 no Supabase (coluna ofx_fitid)." : `O banco recusou: ${error.message}${error.details ? ` (${error.details})` : ""}`);
+        }
         if (!data || data.length !== linhas.length) throw new Error("O banco não confirmou todos os lançamentos — nada foi dado como importado. Tente de novo.");
       }
 
@@ -162,12 +184,14 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
       }
 
       setConcluido({
+        mesFatura: analise.mesFatura,
         novas: novos.length, estornos: nCreditos, futuras: lancarFuturas ? novos.reduce((s, i) => s + i.futuras.length, 0) : 0, ajustadas: ajustes.length - falhas,
         falhas, aviso: avisoCartao, ajustesCartao,
       });
       setAnalise(null);
-      onConcluido && onConcluido();
+      onConcluido && onConcluido({ mesFatura: analise.mesFatura });
     } catch (err) {
+      console.error("Importar OFX:", err);
       setErro(err.message || "Erro ao importar.");
     } finally {
       setSalvando(false);
@@ -196,11 +220,11 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
           {lendo ? "Lendo o arquivo…" : analise || concluido ? "Escolher outro arquivo" : "Escolher arquivo OFX"}
         </button>
         {nomeArquivo && <div style={{ marginTop: 8, fontSize: 11.5, fontWeight: 600, color: C.inkFaint }}>{nomeArquivo}</div>}
-        {erro && <div style={{ marginTop: 10, fontSize: 12.5, fontWeight: 600, color: C.danger }}>{erro}</div>}
+        {erro && !analise && <div ref={erroRef} role="alert" style={{ marginTop: 10, fontSize: 12.5, fontWeight: 600, color: C.danger }}>{erro}</div>}
       </div>
 
       {concluido && (
-        <div style={{ background: C.greenSoft, borderRadius: 16, padding: 18 }}>
+        <div ref={sucessoRef} role="status" style={{ background: C.greenSoft, borderRadius: 16, padding: 18 }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: C.greenText }}>Fatura importada ✓</div>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: C.greenText, marginTop: 6, lineHeight: 1.5 }}>
             {concluido.novas} {concluido.novas === 1 ? "compra nova" : "compras novas"}
@@ -217,6 +241,9 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
               As compras novas entraram como "Categorizando…". Em Mais → Categorias, o botão "Categorizar com o COSMO" classifica todas de uma vez.
             </div>
           )}
+          <button onClick={onVoltar} style={{ marginTop: 12, padding: "11px 16px", borderRadius: 12, border: "none", background: C.purple, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>
+            Ver a fatura no cartão
+          </button>
         </div>
       )}
 
@@ -226,13 +253,13 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
         zerarFaturaInicial={zerarFaturaInicial} setZerarFaturaInicial={setZerarFaturaInicial}
         abaterLimite={abaterLimite} setAbaterLimite={setAbaterLimite} jaPaga={jaPaga} setJaPaga={setJaPaga} lancarCreditos={lancarCreditos} setLancarCreditos={setLancarCreditos}
         faturaInicial={faturaInicial} limiteExtra={limiteExtra}
-        salvando={salvando} onConfirmar={confirmar} onCancelar={() => { setAnalise(null); setNomeArquivo(""); }} botaoSec={botaoSec}
+        salvando={salvando} erro={erro} erroRef={erroRef} onConfirmar={confirmar} onCancelar={() => { setAnalise(null); setNomeArquivo(""); }} botaoSec={botaoSec}
       />}
     </div>
   );
 }
 
-function Previa({ analise, cartao, marcados, setMarcados, lancarFuturas, setLancarFuturas, zerarFaturaInicial, setZerarFaturaInicial, abaterLimite, setAbaterLimite, jaPaga, setJaPaga, lancarCreditos, setLancarCreditos, faturaInicial, limiteExtra, salvando, onConfirmar, onCancelar, botaoSec }) {
+function Previa({ analise, cartao, marcados, setMarcados, lancarFuturas, setLancarFuturas, zerarFaturaInicial, setZerarFaturaInicial, abaterLimite, setAbaterLimite, jaPaga, setJaPaga, lancarCreditos, setLancarCreditos, faturaInicial, limiteExtra, salvando, erro, erroRef, onConfirmar, onCancelar, botaoSec }) {
   const { ofx, resultado, mesFatura, totalAppAntes } = analise;
   const { totais, itens } = resultado;
   const novos = itens.filter((i) => i.status === "novo");
@@ -337,6 +364,12 @@ function Previa({ analise, cartao, marcados, setMarcados, lancarFuturas, setLanc
         </div>
       )}
 
+      {erro && (
+        <div ref={erroRef} role="alert" style={{ background: C.dangerSoft || "#FDECEC", border: `1px solid ${C.danger}`, borderRadius: 12, padding: "12px 14px", fontSize: 13, fontWeight: 700, color: C.danger, lineHeight: 1.45 }}>
+          Não importei nada. {erro}
+          <div style={{ marginTop: 4, fontSize: 11.5, fontWeight: 600 }}>Pode tentar de novo — nada fica duplicado.</div>
+        </div>
+      )}
       {(novos.length > 0 || ajustes.length > 0 || resultado.creditosNovos.length > 0) ? (
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={onConfirmar} disabled={salvando || nSelecionados === 0}

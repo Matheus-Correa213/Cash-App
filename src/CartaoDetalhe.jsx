@@ -145,7 +145,7 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
       <ImportarOFXCartao
         cartao={cartao} membro={membro}
         onVoltar={() => setImportando(false)}
-        onConcluido={() => { carregar({ silencioso: true }); onSalvo && onSalvo(); }}
+        onConcluido={({ mesFatura } = {}) => { if (mesFatura) setMesEscolhido(mesFatura); carregar({ silencioso: true }); onSalvo && onSalvo(); }}
       />
     );
   }
