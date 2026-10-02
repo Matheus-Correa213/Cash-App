@@ -71,7 +71,10 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
       .filter((i) => i.recorrente || (i.mes_especifico && i.mes_especifico.slice(0, 7) === mes))
       .map((i) => {
         const pagamento = pagamentoPorItem.get(i.id);
-        const valorMes = valorMesPorItem.has(i.id) ? valorMesPorItem.get(i.id) : null;
+        // Valor específico de um mês só existe pra item VARIÁVEL. Item fixo é
+        // fixo (pedido do Matheus, 02/10/2026: "se é fixo, é fixo"): ignora
+        // qualquer valor de mês que sobrou de quando o item era variável.
+        const valorMes = i.tipo_valor === "variavel" && valorMesPorItem.has(i.id) ? valorMesPorItem.get(i.id) : null;
         const padrao = i.valor_fixo != null ? Number(i.valor_fixo) : null;
         const previsto = valorMes != null ? valorMes : padrao; // null = sem valor nenhum
         const valorReal = pagamento ? Number(pagamento.valor_pago) : 0;
@@ -314,6 +317,16 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
           const textoValor = item.pago
             ? moeda(item.valorReal)
             : item.previsto != null ? `${item.aproximado ? "~" : ""}${moeda(item.previsto)}` : "definir valor";
+          // Tocar no valor: item pago → ajusta o valor pago; variável → valor
+          // do mês; fixo/de um mês só SEM valor → abre o editar (é lá que se
+          // define); fixo com valor → nada a ajustar, fixo é fixo.
+          const acaoValor = item.pago
+            ? () => abrirPainel(item, MODO.AJUSTAR_PAGO)
+            : item.tipo_valor === "variavel"
+              ? () => abrirPainel(item, MODO.VALOR_MES)
+              : item.previsto == null
+                ? () => { fecharPainel(); setEditandoId(item.id); }
+                : null;
           return (
             <div key={item.id} style={{ borderBottom: `1px solid ${C.line}` }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
@@ -331,20 +344,24 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
                 {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                {/* Tocar no valor abre o ajuste rápido: valor do mês (item em
-                    aberto) ou valor pago (item já pago). */}
-                <button
-                  type="button"
-                  onClick={() => abrirPainel(item, item.pago ? MODO.AJUSTAR_PAGO : MODO.VALOR_MES)}
-                  style={{
-                    border: "none", background: "transparent", padding: 0, cursor: "pointer",
-                    fontSize: item.previsto == null && !item.pago ? 12.5 : 14, fontWeight: 800,
-                    color: item.pago ? C.green : item.aproximado ? C.inkMute : item.previsto == null ? C.accent : C.ink,
-                    textDecoration: "underline dotted", textUnderlineOffset: 3,
-                  }}
-                >
-                  {textoValor}
-                </button>
+                {/* Tocar no valor abre o ajuste rápido (ver `acaoValor`). Item
+                    fixo com valor não tem o que ajustar: vira texto puro. */}
+                {acaoValor ? (
+                  <button
+                    type="button"
+                    onClick={acaoValor}
+                    style={{
+                      border: "none", background: "transparent", padding: 0, cursor: "pointer",
+                      fontSize: item.previsto == null && !item.pago ? 12.5 : 14, fontWeight: 800,
+                      color: item.pago ? C.green : item.aproximado ? C.inkMute : item.previsto == null ? C.accent : C.ink,
+                      textDecoration: "underline dotted", textUnderlineOffset: 3,
+                    }}
+                  >
+                    {textoValor}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{textoValor}</span>
+                )}
                 {item.pago ? (
                   <>
                     <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> pago</span>
@@ -406,7 +423,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
                     onClick={() => removerValorMes(item)} disabled={salvandoEste}
                     style={{ marginTop: 8, border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline" }}
                   >
-                    {item.tipo_valor === "variavel" ? "Voltar ao valor aproximado" : "Voltar ao valor de sempre"}
+                    Voltar ao valor aproximado
                   </button>
                 )}
               </div>
@@ -428,6 +445,7 @@ function subtituloDe(item) {
   const partes = [];
   if (item.dia_vencimento) partes.push(`vence dia ${item.dia_vencimento}`);
   if (item.recorrente) partes.push("todo mês");
+  else if (item.mes_especifico) partes.push(`só em ${nomeMes(item.mes_especifico.slice(0, 7)).split(" ")[0]}`);
   if (!item.pago) {
     if (item.aproximado) partes.push("valor aproximado");
     else if (item.tipo_valor === "variavel" && item.previsto == null) partes.push("valor variável");
@@ -438,14 +456,19 @@ function subtituloDe(item) {
   return partes.join(" · ");
 }
 
-// Formulário de criar/editar um item — nome, categoria, valor, dia de
-// vencimento, e se é recorrente (aparece em TODOS os meses) ou de um mês
-// específico só.
+// Formulário de criar/editar um item — nome, categoria, QUANDO aparece, valor
+// e dia de vencimento.
 //
-// Valor (migração 15): "fixo" = o valor de sempre (obrigatório); "variável" =
-// muda todo mês, com um valor APROXIMADO opcional pros meses em que ainda não
-// se sabe o real. Nos dois casos, o campo "Valor de <mês>" é o valor específico
-// do mês que está aberto na tela (opcional) — vale só pra ele.
+// Quando aparece (pedido do Matheus, 02/10/2026: "nem tudo é recorrente, tem
+// coisas exclusivas de outubro e de cada mês"): escolha bem visível no topo,
+// "Todo mês" ou "Só em um mês" (com o mês). Item de um mês só tem UM campo de
+// valor, opcional (não existe "outros meses" pra ele) e é gravado como fixo.
+//
+// Valor de item que aparece todo mês: "fixo" = um valor só, o de sempre
+// (obrigatório) — "se é fixo, é fixo"; "variável" = muda todo mês, com um
+// valor APROXIMADO opcional pros meses em que ainda não se sabe o real e, só
+// aqui, o campo "Valor de <mês>": o valor específico do mês que está aberto na
+// tela (migração 15), que vale só pra ele.
 function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo, onCancelar }) {
   const [nome, setNome] = useState(item?.nome || "");
   const [categoria, setCategoria] = useState(item?.categoria || frentesGasto[0]?.chave || "");
@@ -458,23 +481,27 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
   const rotuloMes = nomeMes(mesAtual);
+  // "Valor de <mês>" só existe pra item variável que aparece todo mês.
+  const usaValorDoMes = recorrente && tipoValor === "variavel";
 
   async function salvar(e) {
     e.preventDefault();
     setErro("");
     if (!nome.trim()) { setErro("Dê um nome pro item (ex: Aluguel, Água, Luz)."); return; }
-    if (tipoValor === "fixo" && (!valorFixo || Number(valorFixo) <= 0)) { setErro("Informe o valor fixo, ou troque pra \"valor variável\"."); return; }
-    if (tipoValor === "variavel" && valorFixo !== "" && lerValor(valorFixo) == null) { setErro("O valor aproximado precisa ser um número válido."); return; }
-    if (valorMesStr !== "" && lerValor(valorMesStr) == null) { setErro(`O valor de ${rotuloMes} precisa ser um número válido.`); return; }
-    if (!recorrente && !mesEspecifico) { setErro("Escolha o mês desse item, ou marque como recorrente."); return; }
+    if (!recorrente && !mesEspecifico) { setErro("Escolha o mês desse item, ou troque pra \"Todo mês\"."); return; }
+    if (recorrente && tipoValor === "fixo" && (!valorFixo || Number(valorFixo) <= 0)) { setErro("Informe o valor fixo, ou troque pra \"valor variável\"."); return; }
+    if (valorFixo !== "" && lerValor(valorFixo) == null) { setErro(recorrente ? "O valor aproximado precisa ser um número válido." : "O valor precisa ser um número válido."); return; }
+    if (usaValorDoMes && valorMesStr !== "" && lerValor(valorMesStr) == null) { setErro(`O valor de ${rotuloMes} precisa ser um número válido.`); return; }
     setSalvando(true);
     try {
       const payload = {
         familia_id: familiaId,
         nome: nome.trim(),
         categoria,
-        tipo_valor: tipoValor,
+        // Item de um mês só é sempre "fixo" (um valor, ou ainda sem valor).
+        tipo_valor: recorrente ? tipoValor : "fixo",
         // Fixo: o valor de sempre. Variável: o valor aproximado (opcional).
+        // Um mês só: o valor do item (opcional).
         valor_fixo: valorFixo !== "" ? Number(valorFixo) : null,
         dia_vencimento: diaVencimento ? Number(diaVencimento) : null,
         recorrente,
@@ -500,7 +527,7 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
       // (tentar de novo duplicaria o item).
       let avisoMes = "";
       const antes = valorDoMes != null ? String(valorDoMes) : "";
-      if (valorMesStr !== antes) {
+      if (usaValorDoMes && valorMesStr !== antes) {
         try {
           if (valorMesStr !== "") {
             const { error } = await supabase
@@ -539,28 +566,48 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
       </div>
 
       <div>
-        <Label>Valor</Label>
+        <Label>Quando aparece</Label>
         <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
-          <Chip ativo={tipoValor === "fixo"} cor={C.purple} onClick={() => setTipoValor("fixo")}>Fixo (sempre o mesmo)</Chip>
-          <Chip ativo={tipoValor === "variavel"} cor={C.purple} onClick={() => setTipoValor("variavel")}>Variável (muda todo mês)</Chip>
+          <Chip ativo={recorrente} cor={C.purple} onClick={() => setRecorrente(true)}>Todo mês</Chip>
+          <Chip ativo={!recorrente} cor={C.purple} onClick={() => setRecorrente(false)}>Só em um mês</Chip>
         </div>
-        <div style={{ marginTop: 10 }}>
-          <Label>{tipoValor === "fixo" ? "Valor de sempre" : "Valor aproximado nos outros meses (opcional)"}</Label>
-          <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="number" step="0.01" placeholder="0,00" value={valorFixo} onChange={(e) => setValorFixo(e.target.value)} />
-          {tipoValor === "variavel" && (
-            <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>Um valor arredondado pros meses em que você ainda não sabe quanto vem. Aparece com "~" na lista.</div>
+        {!recorrente && (
+          <div style={{ marginTop: 10 }}>
+            <Label>Em qual mês</Label>
+            <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="month" value={mesEspecifico} onChange={(e) => setMesEspecifico(e.target.value)} />
+          </div>
+        )}
+      </div>
+
+      {recorrente ? (
+        <div>
+          <Label>Valor</Label>
+          <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+            <Chip ativo={tipoValor === "fixo"} cor={C.purple} onClick={() => setTipoValor("fixo")}>Fixo (sempre o mesmo)</Chip>
+            <Chip ativo={tipoValor === "variavel"} cor={C.purple} onClick={() => setTipoValor("variavel")}>Variável (muda todo mês)</Chip>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Label>{tipoValor === "fixo" ? "Valor de sempre" : "Valor aproximado nos outros meses (opcional)"}</Label>
+            <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="number" step="0.01" placeholder="0,00" value={valorFixo} onChange={(e) => setValorFixo(e.target.value)} />
+            {tipoValor === "variavel" && (
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>Um valor arredondado pros meses em que você ainda não sabe quanto vem. Aparece com "~" na lista.</div>
+            )}
+          </div>
+          {usaValorDoMes && (
+            <div style={{ marginTop: 10 }}>
+              <Label>Valor de {rotuloMes} (opcional)</Label>
+              <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="number" step="0.01" placeholder="0,00" value={valorMesStr} onChange={(e) => setValorMesStr(e.target.value)} />
+              <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>Se você já sabe quanto vem em {rotuloMes}, coloque aqui — vale só pra esse mês.</div>
+            </div>
           )}
         </div>
-        <div style={{ marginTop: 10 }}>
-          <Label>Valor de {rotuloMes} (opcional)</Label>
-          <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="number" step="0.01" placeholder="0,00" value={valorMesStr} onChange={(e) => setValorMesStr(e.target.value)} />
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>
-            {tipoValor === "variavel"
-              ? `Se você já sabe quanto vem em ${rotuloMes}, coloque aqui — vale só pra esse mês.`
-              : `Só preencha se em ${rotuloMes} o valor for diferente do de sempre.`}
-          </div>
+      ) : (
+        <div>
+          <Label>Valor (opcional)</Label>
+          <input style={{ ...campoInput, width: "100%", marginTop: 4 }} type="number" step="0.01" placeholder="0,00" value={valorFixo} onChange={(e) => setValorFixo(e.target.value)} />
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>Se ainda não sabe quanto vem, deixe em branco e defina depois.</div>
         </div>
-      </div>
+      )}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
         <div style={{ flex: "1 1 140px" }}>
@@ -568,18 +615,6 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
           <input style={{ ...campoInput, width: "100%", marginTop: 4, boxSizing: "border-box" }} type="number" min={1} max={31} placeholder="ex: 10" value={diaVencimento} onChange={(e) => setDiaVencimento(e.target.value)} />
         </div>
       </div>
-
-      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, fontWeight: 600, color: C.ink, cursor: "pointer" }}>
-        <input type="checkbox" checked={recorrente} onChange={(e) => setRecorrente(e.target.checked)} />
-        Recorrente — aparece todo mês
-      </label>
-
-      {!recorrente && (
-        <div>
-          <Label>Em qual mês esse item aparece</Label>
-          <input style={{ ...campoInput, marginTop: 4 }} type="month" value={mesEspecifico} onChange={(e) => setMesEspecifico(e.target.value)} />
-        </div>
-      )}
 
       <div style={{ display: "flex", gap: 8 }}>
         <button type="submit" disabled={salvando} style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: C.purple, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>
