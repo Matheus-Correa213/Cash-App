@@ -23,6 +23,11 @@ export default function ImportarArquivo({ membro, frentesGasto, fontesReceita, o
   async function onEscolherArquivo(e) {
     const arquivo = e.target.files?.[0];
     if (!arquivo) return;
+    if (/\.ofx$/i.test(arquivo.name)) {
+      e.target.value = "";
+      setErro("Arquivo OFX (fatura de cartão) se importa pela tela do cartão: Mais → Contas e cartões → escolha o cartão → \"Importar fatura (OFX)\".");
+      return;
+    }
     setNomeArquivo(arquivo.name);
     setErro("");
     setPropostas(null);

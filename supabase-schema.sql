@@ -427,6 +427,13 @@ alter table lancamentos add column if not exists parcela_atual smallint;
 alter table lancamentos add column if not exists parcela_total smallint;
 alter table lancamentos add column if not exists compra_parcelada_id uuid;
 
+-- Migração 16 (02/10/2026): código único da transação no arquivo OFX do banco
+-- (FITID). Evita duplicar compras ao importar a fatura do cartão.
+alter table lancamentos add column if not exists ofx_fitid text;
+create unique index if not exists idx_lancamentos_cartao_ofx_fitid
+  on lancamentos (cartao_id, ofx_fitid)
+  where ofx_fitid is not null;
+
 create index if not exists idx_lancamentos_conta on lancamentos (conta_id);
 create index if not exists idx_lancamentos_cartao on lancamentos (cartao_id);
 create index if not exists idx_lancamentos_tag on lancamentos (tag);

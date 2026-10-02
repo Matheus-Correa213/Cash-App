@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import LogoInstituicao from "./LogoInstituicao.jsx";
 import EditarLancamento from "./EditarLancamento.jsx";
+import ImportarOFXCartao from "./ImportarOFXCartao.jsx";
 
 // Detalhe de um cartão — visão estilo app de banco: anel de limite, e a
 // fatura de um mês por vez, com setas pra folhear os meses (só os que têm
@@ -29,14 +30,20 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
   // papéis, sem distinção (diferente de "Pagar fatura atual", que continua
   // só do dono).
   const [editando, setEditando] = useState(false);
+  // Importar a fatura por arquivo OFX (02/10/2026) — ver ImportarOFXCartao.jsx.
+  const [importando, setImportando] = useState(false);
   // Qual mês da fatura está sendo folheado agora — null enquanto não foi
   // tocado ainda, o que faz o mês corrente (mesAtual, calculado mais abaixo)
   // ser o ponto de partida sempre que o cartão muda.
   const [mesEscolhido, setMesEscolhido] = useState(null);
   const [editandoLancamentoId, setEditandoLancamentoId] = useState(null);
 
-  async function carregar() {
-    setCarregando(true); setErro("");
+  // `silencioso`: recarrega os dados SEM trocar a tela por "Carregando…" — senão
+  // a tela de importação OFX (filha deste componente) desmontava no meio da
+  // importação e a mensagem de conclusão sumia.
+  async function carregar({ silencioso } = {}) {
+    if (!silencioso) setCarregando(true);
+    setErro("");
     try {
       const [{ data: k, error: e1 }, { data: l, error: e2 }] = await Promise.all([
         supabase.from("cartoes_credito").select("*").eq("id", cartaoId).single(),
@@ -92,6 +99,30 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
   const disponivel = cartao?.limite != null ? Math.max(0, cartao.limite - usado) : null;
   const pctUsado = cartao?.limite ? Math.min(100, Math.round((usado / cartao.limite) * 100)) : 0;
 
+  // Parcelamentos em andamento (02/10/2026 — "analisar as parcelas"): agrupa
+  // as parcelas em aberto por compra (compra_parcelada_id) e mostra quanto
+  // ainda falta pagar de cada uma e quando termina.
+  const parcelamentos = useMemo(() => {
+    const grupos = new Map();
+    for (const l of lancamentosAbertos) {
+      if (!(l.parcela_total > 1) || !l.compra_parcelada_id) continue;
+      if (!grupos.has(l.compra_parcelada_id)) grupos.set(l.compra_parcelada_id, []);
+      grupos.get(l.compra_parcelada_id).push(l);
+    }
+    return [...grupos.values()].map((ps) => {
+      ps.sort((a, b) => a.data.localeCompare(b.data));
+      const proxima = ps[0], ultima = ps[ps.length - 1];
+      return {
+        id: proxima.compra_parcelada_id,
+        nome: (proxima.descricao || "Compra parcelada").replace(/\s*\(\d+\/\d+\)\s*$/, ""),
+        proximaAtual: proxima.parcela_atual, total: proxima.parcela_total, valorParcela: Number(proxima.valor),
+        restantes: ps.length, restante: ps.reduce((s, p) => s + Number(p.valor), 0),
+        termina: ultima.data.slice(0, 7), proximaData: proxima.data,
+      };
+    }).sort((a, b) => a.proximaData.localeCompare(b.proximaData));
+  }, [lancamentosAbertos]);
+  const totalParcelado = parcelamentos.reduce((s, p) => s + p.restante, 0);
+
   async function pagarFaturaAtual() {
     if (!confirm(`Marcar a fatura de ${cartao.nome} (${moeda(totalFaturaAtiva)}) como paga?`)) return;
     try {
@@ -108,6 +139,16 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
   if (erro || !cartao) return <div style={{ padding: 18, color: C.danger }}>{erro || "Cartão não encontrado."}</div>;
 
   const inst = instituicaoDe(cartao.bandeira || cartao.nome);
+
+  if (importando) {
+    return (
+      <ImportarOFXCartao
+        cartao={cartao} membro={membro}
+        onVoltar={() => setImportando(false)}
+        onConcluido={() => { carregar({ silencioso: true }); onSalvo && onSalvo(); }}
+      />
+    );
+  }
 
   if (editando) {
     return (
@@ -127,7 +168,12 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", textAlign: "left" }}>‹ Voltar</button>
-        <button onClick={() => setEditando(true)} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: "transparent", color: C.inkMute, fontSize: 12.5, padding: "6px 10px", cursor: "pointer" }}>Editar cartão</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          {podeEditar && (
+            <button onClick={() => setImportando(true)} style={{ border: `1px solid ${C.accent}`, borderRadius: 8, background: C.accentSoft, color: C.accent, fontSize: 12.5, fontWeight: 700, padding: "6px 10px", cursor: "pointer" }}>Importar fatura (OFX)</button>
+          )}
+          <button onClick={() => setEditando(true)} style={{ border: `1px solid ${C.line}`, borderRadius: 8, background: "transparent", color: C.inkMute, fontSize: 12.5, padding: "6px 10px", cursor: "pointer" }}>Editar cartão</button>
+        </div>
       </div>
 
       <div style={{ background: `linear-gradient(135deg, ${inst.cor} 0%, ${inst.corEscura} 100%)`, borderRadius: 20, padding: 20, height: 130, display: "flex", flexDirection: "column", justifyContent: "space-between" }}>
@@ -204,6 +250,26 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
         </div>
       </div>
 
+      {parcelamentos.length > 0 && (
+        <div style={{ background: C.card, borderRadius: 16, padding: "14px 16px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>Parcelamentos em andamento</div>
+            <div style={{ fontSize: 11.5, fontWeight: 700, color: "#8A05BE" }}>{moeda(totalParcelado)} a pagar</div>
+          </div>
+          {parcelamentos.map((p) => (
+            <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 0", borderTop: `1px solid ${C.line}`, marginTop: 8 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, wordBreak: "break-word" }}>{p.nome}</div>
+                <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>
+                  parcela {p.proximaAtual}/{p.total} · {moeda(p.valorParcela)} · faltam {p.restantes} · termina em {nomeMesCurto(p.termina)}
+                </div>
+              </div>
+              <span style={{ fontSize: 13.5, fontWeight: 800, color: C.ink }}>{moeda(p.restante)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* pagar_fatura_cartao() já recusa quem não é dono direto no banco
           ("Só o administrador pode pagar faturas.") — o botão só fica
           escondido aqui pra não levar a esse erro cru. Só aparece na fatura
@@ -217,6 +283,11 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
       )}
     </div>
   );
+}
+
+function nomeMesCurto(mes) {
+  const [a, m] = mes.split("-").map(Number);
+  return new Date(Date.UTC(a, m - 1, 1)).toLocaleDateString("pt-BR", { month: "short", year: "2-digit", timeZone: "UTC" }).replace(". de ", "/").replace(".", "");
 }
 
 function setaFatura(desativada) {

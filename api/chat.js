@@ -140,7 +140,7 @@ function montarFerramentas(categoriasResumo) {
   },
   {
     name: "situacao_financeira_agora",
-    description: "Devolve o saldo REAL de cada conta/carteira agora e, de cada cartão de crédito, a fatura do ciclo atual e o dia de vencimento. Use junto com planejamento_do_mes pra montar estratégia de pagamento (o que o dinheiro disponível cobre e até quando). Só consulta — não grava nada.",
+    description: "Devolve o saldo REAL de cada conta/carteira agora e, de cada cartão de crédito, a fatura do ciclo atual, o total das faturas dos próximos meses (parcelas e compras já lançadas) e o dia de vencimento. Use junto com planejamento_do_mes pra montar estratégia de pagamento (o que o dinheiro disponível cobre e até quando). Só consulta — não grava nada.",
     input_schema: { type: "object", properties: {} },
   },
   ];
@@ -273,9 +273,14 @@ export default async function handler(req, res) {
         const buckets = abertos.map((l) => mesDaFatura(l.data, k.dia_fechamento));
         const mesAtual = buckets.filter((m) => m >= hojeMes).sort()[0] || hojeMes;
         const fatura = abertos.filter((_, i) => buckets[i] === mesAtual).reduce((s, l) => s + Number(l.valor), 0) + Number(k.fatura_inicial || 0);
-        return { nome: k.nome, fatura_do_ciclo_atual: fatura, mes_da_fatura: mesAtual, dia_vencimento: k.dia_vencimento ?? null, dia_fechamento: k.dia_fechamento ?? null };
+        // Todas as faturas em aberto, mês a mês (parcelas futuras e compras já lançadas/importadas por OFX).
+        const porMes = {};
+        abertos.forEach((l, i) => { porMes[buckets[i]] = (porMes[buckets[i]] || 0) + Number(l.valor); });
+        porMes[mesAtual] = (porMes[mesAtual] || 0) + Number(k.fatura_inicial || 0);
+        const faturas_por_mes = Object.entries(porMes).filter(([m]) => m >= hojeMes).sort(([a], [b]) => a.localeCompare(b)).map(([mes, total]) => ({ mes, total }));
+        return { nome: k.nome, fatura_do_ciclo_atual: fatura, mes_da_fatura: mesAtual, faturas_por_mes, dia_vencimento: k.dia_vencimento ?? null, dia_fechamento: k.dia_fechamento ?? null };
       });
-      return { hoje, saldo_total_em_contas: saldoTotal, contas, cartoes, observacao: "Faturas de ciclos seguintes e parcelas futuras ainda não aparecem aqui — só o ciclo atual de cada cartão." };
+      return { hoje, saldo_total_em_contas: saldoTotal, contas, cartoes, observacao: "faturas_por_mes soma só o que já está lançado no app (compras e parcelas, inclusive as importadas por OFX). Compras futuras ainda não feitas não existem aqui." };
     }
     return { erro: "ferramenta desconhecida" };
   }
