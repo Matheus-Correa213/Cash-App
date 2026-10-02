@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, moeda, mesAtualISO, nomeMes } from "./theme.js";
-import { IconCheck, IconClock } from "./Icons.jsx";
+import { IconCheck, IconClock, IconCosmo } from "./Icons.jsx";
+import { calcularItensDoMes } from "./planejamentoCalculo.js";
 
 // Planejamento financeiro — pedido do Matheus (leva 12, 25/09/2026): "uma
 // tela de planejamento financeiro, onde eu posso escrever os gastos
@@ -51,7 +52,7 @@ function mensagemTabelaFaltando(error, tabela, migracao, acao) {
   return faltando ? `${acao} — rode a migração ${migracao} no Supabase.` : error?.message || acao;
 }
 
-export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, frentesGasto, onAtualizado, onLancarAgora, onVoltar }) {
+export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, frentesGasto, onAtualizado, onLancarAgora, onPerguntarCosmo, onVoltar }) {
   const [mes, setMes] = useState(mesAtualISO());
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
@@ -59,44 +60,13 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   const [painel, setPainel] = useState(null);
   const [valorInformado, setValorInformado] = useState("");
   const [salvandoId, setSalvandoId] = useState(null);
+  // Duas formas de olhar a mesma lista (pedido do Matheus, 02/10/2026): "por
+  // categoria" (a de sempre) e "por vencimento". Na visão por vencimento dá
+  // pra filtrar: tudo / só com data / só sem data.
+  const [visao, setVisao] = useState("categoria");
+  const [filtroData, setFiltroData] = useState("tudo");
 
-  const itensDoMes = useMemo(() => {
-    const pagamentoPorItem = new Map(
-      (pagamentos || []).filter((p) => p.mes.slice(0, 7) === mes).map((p) => [p.item_id, p])
-    );
-    const valorMesPorItem = new Map(
-      (valoresMes || []).filter((v) => v.mes.slice(0, 7) === mes).map((v) => [v.item_id, Number(v.valor)])
-    );
-    return itens
-      .filter((i) => i.recorrente || (i.mes_especifico && i.mes_especifico.slice(0, 7) === mes))
-      .map((i) => {
-        const pagamento = pagamentoPorItem.get(i.id);
-        // Valor específico de um mês só existe pra item VARIÁVEL. Item fixo é
-        // fixo (pedido do Matheus, 02/10/2026: "se é fixo, é fixo"): ignora
-        // qualquer valor de mês que sobrou de quando o item era variável.
-        const valorMes = i.tipo_valor === "variavel" && valorMesPorItem.has(i.id) ? valorMesPorItem.get(i.id) : null;
-        const padrao = i.valor_fixo != null ? Number(i.valor_fixo) : null;
-        const previsto = valorMes != null ? valorMes : padrao; // null = sem valor nenhum
-        const valorReal = pagamento ? Number(pagamento.valor_pago) : 0;
-        return {
-          ...i,
-          pago: !!pagamento,
-          valorReal,
-          valorMes,
-          previsto,
-          // Aproximado = item variável usando só o valor padrão (nenhum valor do mês).
-          aproximado: valorMes == null && i.tipo_valor === "variavel" && padrao != null,
-          // O que entra na soma do previsto: o planejado; sem planejado mas já
-          // pago, o próprio pago (o previsto nunca fica abaixo do que já saiu).
-          previstoSoma: previsto != null ? previsto : valorReal,
-        };
-      })
-      .sort((a, b) => {
-        if (a.pago !== b.pago) return a.pago ? 1 : -1;
-        const da = a.dia_vencimento ?? 99, db = b.dia_vencimento ?? 99;
-        return da - db;
-      });
-  }, [itens, pagamentos, valoresMes, mes]);
+  const itensDoMes = useMemo(() => calcularItensDoMes(itens, pagamentos, valoresMes, mes), [itens, pagamentos, valoresMes, mes]);
 
   const totalPrevisto = itensDoMes.reduce((s, i) => s + i.previstoSoma, 0);
   const totalPago = itensDoMes.filter((i) => i.pago).reduce((s, i) => s + i.valorReal, 0);
@@ -134,6 +104,47 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
       }))
       .sort((a, b) => (a.aberto === b.aberto ? 0 : a.aberto ? -1 : 1) || posicao(a.categoria) - posicao(b.categoria));
   }, [itensDoMes, frentesGasto]);
+
+  // Visão por vencimento (pedido do Matheus, 02/10/2026): "poder filtrar por
+  // datas de vencimento. E os que não têm data marcada é porque não têm
+  // realmente uma data, são coisas pessoais, sem data exata." Então item sem
+  // dia_vencimento NÃO é "esquecido": vai pro grupo "Sem data" e nunca conta
+  // como atrasado. Com data: em aberto fica separado por urgência (só faz
+  // sentido comparar com "hoje" no mês atual — num mês passado tudo que está
+  // em aberto está atrasado; num mês futuro ainda não venceu nada).
+  const gruposVencimento = useMemo(() => {
+    const hoje = new Date();
+    const mesHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
+    const diaHoje = hoje.getDate();
+    const ordem = (a, b) => (a.dia_vencimento ?? 99) - (b.dia_vencimento ?? 99) || a.nome.localeCompare(b.nome);
+    const comData = itensDoMes.filter((i) => i.dia_vencimento != null);
+    const semData = itensDoMes.filter((i) => i.dia_vencimento == null);
+    const abertos = comData.filter((i) => !i.pago).sort(ordem);
+    const pagos = comData.filter((i) => i.pago).sort(ordem);
+    const nomeDoMesLocal = nomeMes(mes).split(" ")[0];
+    const lista = [];
+    if (mes < mesHoje) {
+      lista.push({ chave: "atrasados", titulo: "Atrasados", cor: C.coralText, itens: abertos });
+    } else if (mes === mesHoje) {
+      lista.push({ chave: "atrasados", titulo: "Atrasados", cor: C.coralText, itens: abertos.filter((i) => i.dia_vencimento < diaHoje) });
+      lista.push({ chave: "hoje", titulo: "Vence hoje", cor: C.amberText, itens: abertos.filter((i) => i.dia_vencimento === diaHoje) });
+      lista.push({ chave: "semana", titulo: "Próximos 7 dias", cor: C.accent, itens: abertos.filter((i) => i.dia_vencimento > diaHoje && i.dia_vencimento <= diaHoje + 7) });
+      lista.push({ chave: "depois", titulo: "Mais pra frente neste mês", cor: C.inkMute, itens: abertos.filter((i) => i.dia_vencimento > diaHoje + 7) });
+    } else {
+      lista.push({ chave: "mes", titulo: `Vencimentos de ${nomeDoMesLocal}`, cor: C.accent, itens: abertos });
+    }
+    lista.push({ chave: "pagos", titulo: "Pagos", cor: C.green, itens: pagos, pagos: true });
+    lista.push({ chave: "semdata", titulo: "Sem data · pessoais", cor: C.purple, itens: semData, semData: true });
+    return lista
+      .filter((g) => g.itens.length > 0)
+      .filter((g) => filtroData === "tudo" || (filtroData === "sem" ? g.semData : !g.semData))
+      .map((g) => ({
+        ...g,
+        total: g.pagos
+          ? g.itens.reduce((s, i) => s + i.valorReal, 0)
+          : g.itens.filter((i) => !i.pago).reduce((s, i) => s + i.previstoSoma, 0),
+      }));
+  }, [itensDoMes, mes, filtroData]);
 
   const nomeDoMes = nomeMes(mes).split(" ")[0];
 
@@ -247,6 +258,141 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     onAtualizado();
   }
 
+  // Uma linha de item — a mesma nas duas visões (por categoria e por vencimento).
+  function linha(item) {
+    if (editandoId === item.id) {
+      return (
+        <div key={item.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+          <FormItem
+            familiaId={familiaId} frentesGasto={frentesGasto} mesAtual={mes} item={item} valorDoMes={item.valorMes}
+            onSalvo={() => { setEditandoId(null); onAtualizado(); }}
+            onCancelar={() => setEditandoId(null)}
+          />
+        </div>
+      );
+    }
+    const f = frenteDe(item.categoria);
+    const Icone = f.Icone;
+    const salvandoEste = salvandoId === item.id;
+    const painelAberto = painel && painel.id === item.id ? painel.modo : null;
+    const textoValor = item.pago
+      ? moeda(item.valorReal)
+      : item.previsto != null ? `${item.aproximado ? "~" : ""}${moeda(item.previsto)}` : "definir valor";
+    // Tocar no valor: item pago → ajusta o valor pago; variável → valor
+    // do mês; fixo/de um mês só SEM valor → abre o editar (é lá que se
+    // define); fixo com valor → nada a ajustar, fixo é fixo.
+    const acaoValor = item.pago
+      ? () => abrirPainel(item, MODO.AJUSTAR_PAGO)
+      : item.tipo_valor === "variavel"
+        ? () => abrirPainel(item, MODO.VALOR_MES)
+        : item.previsto == null
+          ? () => { fecharPainel(); setEditandoId(item.id); }
+          : null;
+    return (
+      <div key={item.id} style={{ borderBottom: `1px solid ${C.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
+        <div style={{ width: 36, height: 36, borderRadius: 11, background: item.pago ? C.greenSoft : f.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          {item.pago ? (
+            <IconCheck size={16} color={C.green} strokeWidth={2.3} />
+          ) : f.emoji ? (
+            <span style={{ fontSize: 16, lineHeight: 1 }}>{f.emoji}</span>
+          ) : (
+            Icone && <Icone size={16} color={f.cor} strokeWidth={1.9} />
+          )}
+        </div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.nome}</div>
+          {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
+          {/* Tocar no valor abre o ajuste rápido (ver `acaoValor`). Item
+              fixo com valor não tem o que ajustar: vira texto puro. */}
+          {acaoValor ? (
+            <button
+              type="button"
+              onClick={acaoValor}
+              style={{
+                border: "none", background: "transparent", padding: 0, cursor: "pointer",
+                fontSize: item.previsto == null && !item.pago ? 12.5 : 14, fontWeight: 800,
+                color: item.pago ? C.green : item.aproximado ? C.inkMute : item.previsto == null ? C.accent : C.ink,
+                textDecoration: "underline dotted", textUnderlineOffset: 3,
+              }}
+            >
+              {textoValor}
+            </button>
+          ) : (
+            <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{textoValor}</span>
+          )}
+          {item.pago ? (
+            <>
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> pago</span>
+              <button
+                onClick={() => desmarcarPago(item)} disabled={salvandoEste}
+                style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+              >
+                {salvandoEste ? "…" : "desmarcar"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => abrirPainel(item, MODO.PAGAR)} disabled={salvandoEste}
+                style={{ border: `1.5px solid ${C.green}`, background: "transparent", color: C.green, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: "3px 9px", borderRadius: 100, display: "flex", alignItems: "center", gap: 4 }}
+              >
+                <IconCheck size={11} color={C.green} strokeWidth={2.5} /> marcar pago
+              </button>
+              <button
+                // Pré-preenche o lançamento só com valor CONFIRMADO (do mês ou
+                // fixo) — o aproximado não vira lançamento por engano.
+                onClick={() => onLancarAgora && onLancarAgora({ ...item, valor_preset: item.previsto != null && !item.aproximado ? item.previsto : "" })}
+                style={{ border: "none", background: "transparent", color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 3 }}
+              >
+                <IconClock size={11} color={C.accent} strokeWidth={2.2} /> lançar agora
+              </button>
+            </>
+          )}
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: 4 }}>
+          <button onClick={() => { fecharPainel(); setEditandoId(item.id); }} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>editar</button>
+          <button onClick={() => excluir(item.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>excluir</button>
+        </div>
+      </div>
+      {painelAberto && (
+        <div style={{ padding: "0 0 12px 48px" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, marginBottom: 6 }}>
+            {painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <input
+              style={{ ...campoInput, width: 104 }} type="number" step="0.01" min="0" inputMode="decimal"
+              placeholder="0,00" value={valorInformado} autoFocus
+              onChange={(e) => setValorInformado(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmarPainel(item); } }}
+            />
+            <button
+              onClick={() => confirmarPainel(item)} disabled={salvandoEste}
+              style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+            >
+              {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : "Salvar valor pago"}
+            </button>
+            <button onClick={fecharPainel} style={{ padding: "8px 11px", borderRadius: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" }}>
+              Cancelar
+            </button>
+          </div>
+          {painelAberto === MODO.VALOR_MES && item.valorMes != null && (
+            <button
+              onClick={() => removerValorMes(item)} disabled={salvandoEste}
+              style={{ marginTop: 8, border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+            >
+              Voltar ao valor aproximado
+            </button>
+          )}
+        </div>
+      )}
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {onVoltar && <button onClick={onVoltar} style={{ border: "none", background: "transparent", color: C.ink, fontWeight: 700, fontSize: 13, cursor: "pointer", textAlign: "left" }}>‹ Voltar</button>}
@@ -272,6 +418,15 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
         )}
       </div>
 
+      {onPerguntarCosmo && (
+        <button
+          onClick={() => onPerguntarCosmo(mes)}
+          style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, padding: "12px 0", borderRadius: 12, border: `1.5px solid ${C.accent}`, background: C.accentSoft, color: C.accent, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}
+        >
+          <IconCosmo size={16} color={C.accent} strokeWidth={1.9} /> Estratégia de pagamento com o COSMO
+        </button>
+      )}
+
       {!mostrarForm && (
         <button onClick={() => setMostrarForm(true)} style={{ padding: "13px 0", borderRadius: 12, border: "none", background: C.purple, color: "#fff", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
           + Novo item do planejamento
@@ -285,9 +440,36 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
         />
       )}
 
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <Chip ativo={visao === "categoria"} cor={C.purple} onClick={() => setVisao("categoria")}>Por categoria</Chip>
+        <Chip ativo={visao === "vencimento"} cor={C.purple} onClick={() => setVisao("vencimento")}>Por vencimento</Chip>
+      </div>
+      {visao === "vencimento" && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: -6 }}>
+          <Chip ativo={filtroData === "tudo"} cor={C.accent} onClick={() => setFiltroData("tudo")}>Tudo</Chip>
+          <Chip ativo={filtroData === "com"} cor={C.accent} onClick={() => setFiltroData("com")}>Com data</Chip>
+          <Chip ativo={filtroData === "sem"} cor={C.accent} onClick={() => setFiltroData("sem")}>Sem data</Chip>
+        </div>
+      )}
+
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: "6px 16px" }}>
         {itensDoMes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, padding: "14px 0" }}>Nenhum item de planejamento pra {nomeMes(mes)} ainda.</div>}
-        {grupos.map((g) => {
+        {visao === "vencimento" && itensDoMes.length > 0 && gruposVencimento.length === 0 && (
+          <div style={{ color: C.inkFaint, fontSize: 13.5, padding: "14px 0" }}>{filtroData === "sem" ? "Nenhum item sem data neste mês." : "Nenhum item com data de vencimento neste mês."}</div>
+        )}
+        {visao === "vencimento" && gruposVencimento.map((g) => (
+          <div key={g.chave}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "14px 0 4px" }}>
+              <div style={{ fontSize: 11.5, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: g.cor }}>{g.titulo}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint }}>{g.pagos ? `${moeda(g.total)} pagos` : `${moeda(g.total)} a pagar`}</div>
+            </div>
+            {g.semData && (
+              <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, paddingBottom: 2 }}>Coisas sem vencimento fixo — você paga quando puder.</div>
+            )}
+            {g.itens.map(linha)}
+          </div>
+        ))}
+        {visao === "categoria" && grupos.map((g) => {
           const fg = frenteDe(g.categoria);
           return (
         <div key={g.categoria}>
@@ -298,139 +480,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
             </div>
             <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint }}>{moeda(g.pago)} de {moeda(g.previsto)}</div>
           </div>
-        {g.itens.map((item) => {
-          if (editandoId === item.id) {
-            return (
-              <div key={item.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
-                <FormItem
-                  familiaId={familiaId} frentesGasto={frentesGasto} mesAtual={mes} item={item} valorDoMes={item.valorMes}
-                  onSalvo={() => { setEditandoId(null); onAtualizado(); }}
-                  onCancelar={() => setEditandoId(null)}
-                />
-              </div>
-            );
-          }
-          const f = frenteDe(item.categoria);
-          const Icone = f.Icone;
-          const salvandoEste = salvandoId === item.id;
-          const painelAberto = painel && painel.id === item.id ? painel.modo : null;
-          const textoValor = item.pago
-            ? moeda(item.valorReal)
-            : item.previsto != null ? `${item.aproximado ? "~" : ""}${moeda(item.previsto)}` : "definir valor";
-          // Tocar no valor: item pago → ajusta o valor pago; variável → valor
-          // do mês; fixo/de um mês só SEM valor → abre o editar (é lá que se
-          // define); fixo com valor → nada a ajustar, fixo é fixo.
-          const acaoValor = item.pago
-            ? () => abrirPainel(item, MODO.AJUSTAR_PAGO)
-            : item.tipo_valor === "variavel"
-              ? () => abrirPainel(item, MODO.VALOR_MES)
-              : item.previsto == null
-                ? () => { fecharPainel(); setEditandoId(item.id); }
-                : null;
-          return (
-            <div key={item.id} style={{ borderBottom: `1px solid ${C.line}` }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
-              <div style={{ width: 36, height: 36, borderRadius: 11, background: item.pago ? C.greenSoft : f.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                {item.pago ? (
-                  <IconCheck size={16} color={C.green} strokeWidth={2.3} />
-                ) : f.emoji ? (
-                  <span style={{ fontSize: 16, lineHeight: 1 }}>{f.emoji}</span>
-                ) : (
-                  Icone && <Icone size={16} color={f.cor} strokeWidth={1.9} />
-                )}
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.nome}</div>
-                {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                {/* Tocar no valor abre o ajuste rápido (ver `acaoValor`). Item
-                    fixo com valor não tem o que ajustar: vira texto puro. */}
-                {acaoValor ? (
-                  <button
-                    type="button"
-                    onClick={acaoValor}
-                    style={{
-                      border: "none", background: "transparent", padding: 0, cursor: "pointer",
-                      fontSize: item.previsto == null && !item.pago ? 12.5 : 14, fontWeight: 800,
-                      color: item.pago ? C.green : item.aproximado ? C.inkMute : item.previsto == null ? C.accent : C.ink,
-                      textDecoration: "underline dotted", textUnderlineOffset: 3,
-                    }}
-                  >
-                    {textoValor}
-                  </button>
-                ) : (
-                  <span style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{textoValor}</span>
-                )}
-                {item.pago ? (
-                  <>
-                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> pago</span>
-                    <button
-                      onClick={() => desmarcarPago(item)} disabled={salvandoEste}
-                      style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                    >
-                      {salvandoEste ? "…" : "desmarcar"}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => abrirPainel(item, MODO.PAGAR)} disabled={salvandoEste}
-                      style={{ border: `1.5px solid ${C.green}`, background: "transparent", color: C.green, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: "3px 9px", borderRadius: 100, display: "flex", alignItems: "center", gap: 4 }}
-                    >
-                      <IconCheck size={11} color={C.green} strokeWidth={2.5} /> marcar pago
-                    </button>
-                    <button
-                      // Pré-preenche o lançamento só com valor CONFIRMADO (do mês ou
-                      // fixo) — o aproximado não vira lançamento por engano.
-                      onClick={() => onLancarAgora && onLancarAgora({ ...item, valor_preset: item.previsto != null && !item.aproximado ? item.previsto : "" })}
-                      style={{ border: "none", background: "transparent", color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 3 }}
-                    >
-                      <IconClock size={11} color={C.accent} strokeWidth={2.2} /> lançar agora
-                    </button>
-                  </>
-                )}
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: 4 }}>
-                <button onClick={() => { fecharPainel(); setEditandoId(item.id); }} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>editar</button>
-                <button onClick={() => excluir(item.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>excluir</button>
-              </div>
-            </div>
-            {painelAberto && (
-              <div style={{ padding: "0 0 12px 48px" }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, marginBottom: 6 }}>
-                  {painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
-                </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <input
-                    style={{ ...campoInput, width: 104 }} type="number" step="0.01" min="0" inputMode="decimal"
-                    placeholder="0,00" value={valorInformado} autoFocus
-                    onChange={(e) => setValorInformado(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmarPainel(item); } }}
-                  />
-                  <button
-                    onClick={() => confirmarPainel(item)} disabled={salvandoEste}
-                    style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
-                  >
-                    {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : "Salvar valor pago"}
-                  </button>
-                  <button onClick={fecharPainel} style={{ padding: "8px 11px", borderRadius: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" }}>
-                    Cancelar
-                  </button>
-                </div>
-                {painelAberto === MODO.VALOR_MES && item.valorMes != null && (
-                  <button
-                    onClick={() => removerValorMes(item)} disabled={salvandoEste}
-                    style={{ marginTop: 8, border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-                  >
-                    Voltar ao valor aproximado
-                  </button>
-                )}
-              </div>
-            )}
-            </div>
-          );
-        })}
+        {g.itens.map(linha)}
         </div>
           );
         })}

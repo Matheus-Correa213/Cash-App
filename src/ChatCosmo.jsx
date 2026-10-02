@@ -3,6 +3,7 @@ import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 import { PALETA_CORES, normalizarChave } from "./CategoriaCampos.jsx";
+import { resumoPlanejamentoParaCosmo } from "./planejamentoCalculo.js";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
@@ -17,7 +18,23 @@ import { PALETA_CORES, normalizarChave } from "./CategoriaCampos.jsx";
 // `dbId` (o id da linha no banco) que a gente usa depois pra atualizar
 // `confirmadas` quando a pessoa confirma uma proposta.
 
-const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?"];
+const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?", "Estratégia de pagamento"];
+
+// Pedido do Matheus (02/10/2026): "uma opção de acesso ao COSMO, principalmente
+// pra ter uma ideia de estratégia de pagamento, com base em datas de
+// vencimento, valor na conta e por aí". O botão do Planejamento e a sugestão
+// acima mandam esta mesma pergunta; quem responde com números reais é o
+// /api/chat, pelas ferramentas planejamento_do_mes e situacao_financeira_agora.
+export function textoEstrategiaPagamento(mes) {
+  return `Monte a estratégia de pagamento${mes ? ` de ${nomeDoMesPorExtenso(mes)}` : " do mês"}: olhe o meu planejamento, os vencimentos e o saldo das minhas contas, e me diga em que ordem pagar, o que é mais urgente e se o saldo cobre.`;
+}
+function nomeDoMesPorExtenso(mes) {
+  const [a, m] = mes.split("-").map(Number);
+  return new Date(Date.UTC(a, m - 1, 1)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
+}
+function dataLocalISO(d = new Date()) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 const SAUDACAO = "Oi! Posso lançar gastos e receitas, ler comprovantes, ajudar a cadastrar/atualizar contas e cartões, e te dar um resumo rápido. É só me mandar uma mensagem ou uma foto.";
 
 // `frentesGasto`/`fontesReceita` (migração 10, categorias personalizadas,
@@ -26,7 +43,7 @@ const SAUDACAO = "Oi! Posso lançar gastos e receitas, ler comprovantes, ajudar 
 // pro /api/chat como `categoriasResumo`, pra o COSMO poder propor
 // lançamentos usando as categorias personalizadas também, não só as 6+4
 // fixas da doutrina financeira.
-export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fontesReceita, onVoltar, onSalvo }) {
+export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fontesReceita, planejamento, mesFoco, mensagemInicial, onMensagemInicialConsumida, onVoltar, onSalvo }) {
   const [mensagens, setMensagens] = useState([]);
   const [carregandoHistorico, setCarregandoHistorico] = useState(true);
   const [texto, setTexto] = useState("");
@@ -34,6 +51,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   const [erro, setErro] = useState("");
   const inputArquivo = useRef(null);
   const areaTexto = useRef(null);
+  const enviouInicial = useRef(false);
 
   useEffect(() => {
     let cancelado = false;
@@ -68,6 +86,17 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     carregarHistorico();
     return () => { cancelado = true; };
   }, [membro.id]);
+
+  // Veio do botão "Estratégia de pagamento com o COSMO" do Planejamento: manda
+  // a pergunta sozinho, uma vez, depois que o histórico carregou (assim a
+  // pergunta cai no fim da conversa, não é engolida pelo carregamento).
+  useEffect(() => {
+    if (carregandoHistorico || !mensagemInicial || enviouInicial.current) return;
+    enviouInicial.current = true;
+    onMensagemInicialConsumida && onMensagemInicialConsumida();
+    enviar(mensagemInicial);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [carregandoHistorico, mensagemInicial]);
 
   // Textarea que cresce pra baixo conforme a pessoa escreve (até um teto,
   // pra não tomar a tela toda), com Enter enviando e Shift+Enter quebrando
@@ -121,10 +150,19 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
         gasto: frentesGasto.map((f) => ({ chave: f.chave, label: f.label })),
         receita: fontesReceita.map((f) => ({ chave: f.chave, label: f.label })),
       };
+      // Planejamento (mês atual, o próximo e o que a pessoa estava olhando) —
+      // calculado aqui com a MESMA função da tela, pra o COSMO enxergar os
+      // mesmos números. Só é usado se ele chamar planejamento_do_mes.
+      const agora = new Date();
+      const mesDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const meses = [...new Set([mesFoco, mesDe(agora), mesDe(new Date(agora.getFullYear(), agora.getMonth() + 1, 1))].filter(Boolean))];
+      const planejamentoResumo = planejamento
+        ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, frentesGasto, meses })
+        : undefined;
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo }),
+        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, hoje: dataLocalISO() }),
       });
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao falar com o COSMO.");
@@ -577,7 +615,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
 
       <div style={{ display: "flex", gap: 8, padding: "10px 18px", overflowX: "auto" }}>
         {SUGESTOES.map((s) => (
-          <button key={s} onClick={() => s === "Anexar comprovante" ? inputArquivo.current?.click() : enviar(s)} style={{ whiteSpace: "nowrap", padding: "7px 12px", borderRadius: 100, border: `1px solid ${C.lineStrong}`, background: "#fff", color: C.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+          <button key={s} onClick={() => s === "Anexar comprovante" ? inputArquivo.current?.click() : s === "Estratégia de pagamento" ? enviar(textoEstrategiaPagamento(mesFoco)) : enviar(s)} style={{ whiteSpace: "nowrap", padding: "7px 12px", borderRadius: 100, border: `1px solid ${C.lineStrong}`, background: "#fff", color: C.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
             {s}
           </button>
         ))}

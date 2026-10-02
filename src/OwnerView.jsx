@@ -9,7 +9,7 @@ import CartaoDetalhe from "./CartaoDetalhe.jsx";
 import Investimentos from "./Investimentos.jsx";
 import Relatorios from "./Relatorios.jsx";
 import Assinaturas from "./Assinaturas.jsx";
-import ChatCosmo from "./ChatCosmo.jsx";
+import ChatCosmo, { textoEstrategiaPagamento } from "./ChatCosmo.jsx";
 import ImportarArquivo from "./ImportarArquivo.jsx";
 import Categorias from "./Categorias.jsx";
 import Planejamento from "./Planejamento.jsx";
@@ -88,6 +88,9 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // lançamento já aberto e pré-preenchido (categoria + valor, quando fixo) —
   // ela confirma/ajusta e lança do jeito de sempre.
   const [presetLancamento, setPresetLancamento] = useState(null);
+  // "Estratégia de pagamento com o COSMO" (botão do Planejamento): abre o chat
+  // já com a pergunta pronta, sobre o mês que a pessoa estava olhando.
+  const [chatPlanejamento, setChatPlanejamento] = useState(null); // { mes, mensagem } | null
 
   // `silencioso=true` é pra recarregar depois de uma ação (confirmar um
   // lançamento no chat, editar permissões, etc) SEM esconder a tela atual
@@ -229,6 +232,12 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     setTela(null);
   }
 
+  function perguntarCosmoSobrePlanejamento(mes) {
+    setChatPlanejamento({ mes, mensagem: textoEstrategiaPagamento(mes) });
+    setAba("mais");
+    setTela("chat");
+  }
+
   function irPara(destino) {
     if (destino === "painel" || destino === "receitas" || destino === "gastos") {
       setAba(destino); setTela(null);
@@ -281,7 +290,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
               frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
-              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} planejamentoValoresMes={planejamentoValoresMes} onLancarAgora={lancarAgoraDoPlanejamento}
+              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} planejamentoValoresMes={planejamentoValoresMes} onLancarAgora={lancarAgoraDoPlanejamento} onPerguntarCosmo={perguntarCosmoSobrePlanejamento} chatPlanejamento={chatPlanejamento} onChatPlanejamentoConsumido={() => setChatPlanejamento(null)}
               familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
@@ -295,7 +304,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, planejamentoValoresMes, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, planejamentoValoresMes, onLancarAgora, onPerguntarCosmo, chatPlanejamento, onChatPlanejamentoConsumido, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
     return (
@@ -310,7 +319,16 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
   if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} frentesGasto={frentesGasto} onVoltar={() => setTela(null)} />;
   if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
-  if (tela === "chat") return <ChatCosmo membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
+  if (tela === "chat") {
+    return (
+      <ChatCosmo
+        membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+        planejamento={{ itens: planejamentoItens, pagamentos: planejamentoPagamentos, valoresMes: planejamentoValoresMes }}
+        mesFoco={chatPlanejamento?.mes} mensagemInicial={chatPlanejamento?.mensagem} onMensagemInicialConsumida={onChatPlanejamentoConsumido}
+        onVoltar={() => setTela(null)} onSalvo={onSalvo}
+      />
+    );
+  }
   if (tela === "importar") return <ImportarArquivo membro={membro} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onVoltar={() => setTela(null)} onSalvo={onSalvo} />;
   if (tela === "membros") return <GerenciarMembros membros={membros} membroLogado={membro} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onAtualizado={onMembroAtualizado} onVoltar={() => setTela(null)} />;
   // Categorias personalizadas (migração 10, 16/09/2026) — a lista em si
@@ -346,7 +364,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
     return (
       <Planejamento
         familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} valoresMes={planejamentoValoresMes} frentesGasto={frentesGasto}
-        onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onVoltar={() => setTela(null)}
+        onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onPerguntarCosmo={onPerguntarCosmo} onVoltar={() => setTela(null)}
       />
     );
   }

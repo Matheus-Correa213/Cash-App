@@ -133,10 +133,20 @@ function montarFerramentas(categoriasResumo) {
       required: ["id", "categoria_nova"],
     },
   },
+  {
+    name: "planejamento_do_mes",
+    description: "Devolve o Planejamento financeiro (lista de boletos/contas previstas) do mês atual, do próximo e do mês que a pessoa estava olhando: cada item com dia de vencimento, valor previsto, se o valor é aproximado e se já foi pago. Use pra qualquer pergunta sobre o que falta pagar, vencimentos ou estratégia de pagamento. Só consulta — não grava nada.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "situacao_financeira_agora",
+    description: "Devolve o saldo REAL de cada conta/carteira agora e, de cada cartão de crédito, a fatura do ciclo atual e o dia de vencimento. Use junto com planejamento_do_mes pra montar estratégia de pagamento (o que o dinheiro disponível cobre e até quando). Só consulta — não grava nada.",
+    input_schema: { type: "object", properties: {} },
+  },
   ];
 }
 
-function montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo) {
+function montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo, hoje) {
   const listaContas = (contasResumo || []).length
     ? (contasResumo || []).map((c) => `- [id: ${c.id}] ${c.nome} (${c.tipo}${c.instituicao ? `, ${c.instituicao}` : ""}${c.titular ? `, de ${c.titular}` : ""})`).join("\n")
     : "(nenhuma conta cadastrada ainda)";
@@ -151,7 +161,7 @@ function montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo) {
   const listaCategoriasGasto = (categoriasResumo?.gasto || []).map((c) => `${c.chave} (${c.label})`).join(", ") || "dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude";
   const listaCategoriasReceita = (categoriasResumo?.receita || []).map((c) => `${c.chave} (${c.label})`).join(", ") || "trabalho, correa_books, freelas, outros";
 
-  return `Você é o COSMO, na sua versão focada em finanças, dentro do app Correa Cash — o app financeiro de um casal (Matheus e Alessia). Seu papel: ajudar a lançar gastos/receitas, ajudar a configurar contas/carteiras/cartões, e responder perguntas sobre as finanças do casal usando dados reais (nunca invente números — use a ferramenta resumo_periodo). Você NUNCA grava nada sozinho — toda ação (lançamento, conta, cartão) é sempre uma PROPOSTA que a pessoa confirma na tela, sem exceção.
+  return `Você é o COSMO, na sua versão focada em finanças, dentro do app Correa Cash — o app financeiro de um casal (Matheus e Alessia). Hoje é ${hoje}. Seu papel: ajudar a lançar gastos/receitas, ajudar a configurar contas/carteiras/cartões, e responder perguntas sobre as finanças do casal usando dados reais (nunca invente números — use a ferramenta resumo_periodo). Você NUNCA grava nada sozinho — toda ação (lançamento, conta, cartão) é sempre uma PROPOSTA que a pessoa confirma na tela, sem exceção.
 
 Contas/carteiras já cadastradas nesta família:
 ${listaContas}
@@ -171,6 +181,7 @@ Regras importantes:
 - Cartão de crédito não é uma conta de subtração simples: uma compra parcelada (ex: "comprei um item de 6000 em 10x") consome o LIMITE inteiro na hora da compra, mas só uma parcela entra na fatura de cada mês. Isso ainda não pode ser lançado pelo chat — só pela tela "Novo lançamento" no app, que já sabe dividir e espalhar as parcelas certas pelos meses. Se o usuário descrever uma compra parcelada, não use propor_lancamento nem fatura_atual pra isso — explique que esse tipo de lançamento precisa ser feito em "Novo lançamento" no app.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
 - Se o usuário quiser reorganizar/revisar lançamentos que já foram feitos — por exemplo, separar compras de "mercado" e "combustível" que hoje estão misturadas dentro de "Dia a dia" — chame listar_lancamentos filtrando pela categoria genérica (não peça isso de cara em toda pergunta, só quando for realmente necessário ver a descrição individual de cada lançamento). Depois de ver a lista, decida a categoria nova de cada um pela descrição e chame propor_editar_lancamento uma vez pra CADA lançamento que deve mudar, em paralelo (mesma lógica de propor_conta_ou_cartao) — nunca invente ou edite um lançamento que você não viu na lista.
+- Se o usuário pedir ESTRATÉGIA DE PAGAMENTO (em que ordem pagar, o que priorizar, se o saldo cobre, o que fazer se não cobrir): chame planejamento_do_mes E situacao_financeira_agora, as duas na mesma rodada, e raciocine só com os números que elas devolverem. Considere apenas itens NÃO pagos. Ordene por dia de vencimento; no mês atual, o que tem dia anterior a hoje já está ATRASADO e vem primeiro. Itens SEM dia_vencimento são coisas pessoais, sem data de verdade: trate como flexíveis — vão por último, só se sobrar saldo, e nunca como atrasados. Compare a soma acumulada do que vence com o saldo das contas e diga em que data o saldo deixa de cobrir e quanto falta. Valores marcados como aproximados são estimativa — avise. A fatura de cartão entra como compromisso no dia de vencimento dela, mas se um item do planejamento já representa a mesma fatura/parcela, não some duas vezes (diga a dúvida em vez de adivinhar). Você não sabe quando entra dinheiro novo (salário etc.): não invente, e se faltar saldo pergunte se há entrada prevista antes da data crítica. Formato: ordem sugerida em lista curta (data · item · valor), depois o ponto de atenção, e no máximo uma pergunta. Escreva em texto simples (o chat não formata markdown: nada de ** ou #; use traços e quebras de linha). Você não paga nem marca nada — só orienta.
 - Seja direto, caloroso e breve — poucas frases, sem enrolação.
 - Nunca dê conselho financeiro genérico não pedido; foque em ajudar com o que foi perguntado.`;
 }
@@ -188,7 +199,9 @@ export default async function handler(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return res.status(401).json({ error: "Não autenticado." });
 
-  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo } = req.body || {};
+  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, hoje: hojeCliente } = req.body || {};
+  // "Hoje" vem do navegador (fuso de quem usa); sem isso, a data do servidor.
+  const hoje = /^\d{4}-\d{2}-\d{2}$/.test(hojeCliente || "") ? hojeCliente : new Date().toISOString().slice(0, 10);
   if (!mensagem && !imagemBase64) return res.status(400).json({ error: "Envie uma mensagem ou uma imagem." });
 
   const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: `Bearer ${token}` } } });
@@ -227,6 +240,43 @@ export default async function handler(req, res) {
       if (lista.length >= LIMITE) resultado.aviso = `Lista limitada aos ${LIMITE} lançamentos mais recentes do período — pode haver mais além destes.`;
       return resultado;
     }
+    if (nome === "planejamento_do_mes") {
+      if (!Array.isArray(planejamentoResumo) || planejamentoResumo.length === 0) return { erro: "O app não enviou o planejamento nesta mensagem." };
+      return {
+        hoje,
+        meses: planejamentoResumo,
+        legenda: "dia_vencimento null = sem data (coisa pessoal, sem vencimento fixo). valor_previsto null = ainda sem valor definido. valor_aproximado true = estimativa, não o valor real do boleto. pago true = já quitado.",
+      };
+    }
+    if (nome === "situacao_financeira_agora") {
+      const [rSaldos, rContas, rCartoes, rAbertos] = await Promise.all([
+        supabase.rpc("saldos_contas"),
+        supabase.from("contas").select("id, nome, tipo, instituicao"),
+        supabase.from("cartoes_credito").select("id, nome, limite, dia_fechamento, dia_vencimento, fatura_inicial"),
+        supabase.from("lancamentos").select("cartao_id, valor, data").eq("fatura_paga", false).eq("tipo", "gasto").not("cartao_id", "is", null),
+      ]);
+      const erro = rSaldos.error || rContas.error || rCartoes.error || rAbertos.error;
+      if (erro) return { erro: erro.message };
+      const saldoPorConta = new Map((rSaldos.data || []).map((r) => [r.conta_id, Number(r.saldo)]));
+      const contas = (rContas.data || []).filter((c) => saldoPorConta.has(c.id)).map((c) => ({ nome: c.nome, tipo: c.tipo, instituicao: c.instituicao || null, saldo: saldoPorConta.get(c.id) }));
+      const saldoTotal = contas.reduce((s, c) => s + c.saldo, 0);
+      const hojeMes = hoje.slice(0, 7);
+      // Mesma regra de theme.js (mesDaFatura): compra depois do fechamento cai na fatura do mês seguinte.
+      const mesDaFatura = (dataISO, diaFech) => {
+        const [ano, mes, dia] = dataISO.split("-").map(Number);
+        if (!diaFech || dia <= diaFech) return `${ano}-${String(mes).padStart(2, "0")}`;
+        const d = new Date(Date.UTC(ano, mes, 1));
+        return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      };
+      const cartoes = (rCartoes.data || []).map((k) => {
+        const abertos = (rAbertos.data || []).filter((l) => l.cartao_id === k.id);
+        const buckets = abertos.map((l) => mesDaFatura(l.data, k.dia_fechamento));
+        const mesAtual = buckets.filter((m) => m >= hojeMes).sort()[0] || hojeMes;
+        const fatura = abertos.filter((_, i) => buckets[i] === mesAtual).reduce((s, l) => s + Number(l.valor), 0) + Number(k.fatura_inicial || 0);
+        return { nome: k.nome, fatura_do_ciclo_atual: fatura, mes_da_fatura: mesAtual, dia_vencimento: k.dia_vencimento ?? null, dia_fechamento: k.dia_fechamento ?? null };
+      });
+      return { hoje, saldo_total_em_contas: saldoTotal, contas, cartoes, observacao: "Faturas de ciclos seguintes e parcelas futuras ainda não aparecem aqui — só o ciclo atual de cada cartão." };
+    }
     return { erro: "ferramenta desconhecida" };
   }
 
@@ -239,7 +289,7 @@ export default async function handler(req, res) {
 
   const mensagens = [{ role: "user", content: conteudoUsuario }];
 
-  const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo);
+  const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo, hoje);
   const ferramentas = montarFerramentas(categoriasResumo);
   const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento"]);
   const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento" };
