@@ -549,11 +549,11 @@ grant select, insert, update, delete on categorias to authenticated;
 
 -- planejamento_itens (migração 12, 25/09/2026) — "lembrete de boletos": a
 -- família cadastra contas que espera pagar (fixas ou de valor variável,
--- recorrentes todo mês ou de um mês específico), com dia de vencimento. Não
--- guarda "pago/não pago" — isso é calculado no frontend batendo a categoria
--- do item contra os lançamentos reais daquele mês (ver Planejamento.jsx):
--- existe gasto lançado naquela categoria naquele mês → aparece como pago,
--- com o valor real; senão, fica em aberto. Evita duas fontes de verdade.
+-- recorrentes todo mês ou de um mês específico), com dia de vencimento. O
+-- "pago/não pago" NÃO fica aqui: desde a migração 14 (02/10/2026) é uma
+-- marcação manual por item e por mês, na tabela planejamento_pagamentos logo
+-- abaixo (antes era deduzido pela categoria do lançamento, o que marcava
+-- vários itens de uma mesma categoria como pagos ao mesmo tempo).
 create table if not exists planejamento_itens (
   id uuid primary key default gen_random_uuid(),
   familia_id uuid not null references familias(id) on delete cascade,
@@ -574,6 +574,29 @@ create policy "planejamento: familia ve e mexe" on planejamento_itens
   with check (familia_id = minha_familia_id());
 
 grant select, insert, update, delete on planejamento_itens to authenticated;
+
+-- planejamento_pagamentos (migração 14, 02/10/2026) — uma linha = "este item
+-- foi pago neste mês". Sem linha = em aberto. Marcação manual feita na lista
+-- do planejamento, independente dos lançamentos. valor_pago guarda o valor
+-- que valeu naquele mês (fixo: valor_fixo na hora da marcação; variável: o
+-- que a pessoa informou). unique (item_id, mes) impede marcação duplicada.
+create table if not exists planejamento_pagamentos (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  item_id uuid not null references planejamento_itens(id) on delete cascade,
+  mes date not null,
+  valor_pago numeric(12,2) not null check (valor_pago >= 0),
+  created_at timestamptz not null default now(),
+  unique (item_id, mes)
+);
+
+alter table planejamento_pagamentos enable row level security;
+
+create policy "planejamento pagamentos: familia ve e mexe" on planejamento_pagamentos
+  for all using (familia_id = minha_familia_id())
+  with check (familia_id = minha_familia_id());
+
+grant select, insert, update, delete on planejamento_pagamentos to authenticated;
 
 -- saldos_contas() — ampliado na migração 9 (unificação do acesso da
 -- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido

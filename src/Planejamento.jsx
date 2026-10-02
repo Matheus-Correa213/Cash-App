@@ -10,54 +10,112 @@ import { IconCheck, IconClock } from "./Icons.jsx";
 // ele vai ticando que paguei aquela conta do planejamento... É um lembrete
 // de boletos."
 //
-// Decisão de design confirmada por ele (resposta à pergunta "quem cria o
-// lançamento, a tela ou você?"): "Eu iria lançar o pagamento [normalmente,
-// em Gastos] e na aba de planejamento, ele iria identificar e marcar." Ou
-// seja, o fluxo é sempre: PRIMEIRO o lançamento real (Gastos/Receitas, chat
-// do COSMO, importação), DEPOIS este item de planejamento aparece como
-// "pago" sozinho — nunca o contrário. Por isso esta tela nunca grava
-// "pago = true" em lugar nenhum (não existe essa coluna em
-// planejamento_itens): a cada renderização, ela BATE a categoria + mês do
-// item contra os `lancamentos` reais da família (excluindo compras de
-// cartão — `!l.cartao_id` — pela mesma separação usada em Gastos.jsx, já
-// que uma conta do planejamento é sempre pensada como dinheiro saindo de
-// conta, não fatura de cartão). Isso evita ter duas fontes de verdade que
-// podem dessincronizar.
+// "Pago" é uma MARCAÇÃO MANUAL, feita aqui na lista, por item e por mês
+// (migração 14, 02/10/2026 — pedido do Matheus depois de um bug real). Antes
+// (migração 12) o "pago" era deduzido batendo categoria + mês contra os
+// lançamentos; como vários itens usam a mesma categoria (ex: "Boletos
+// Recorrentes" com Parcela do Empréstimo, Parcela do Cartão e Internet), um
+// único lançamento de R$ 183,25 marcava os três como pagos, todos com o mesmo
+// valor. Decisão dele: "vamos deixar o pago como um item para marcar fora do
+// lançamento, na tela que fica a lista do planejamento — aí evita erros."
 //
-// Limite conhecido (aceito no design, por simplicidade): se dois itens do
-// planejamento usarem a MESMA categoria no MESMO mês, um único lançamento
-// nessa categoria marca os dois como pagos. Na prática isso raramente
-// acontece (cada conta — água, luz, aluguel — tende a ter sua própria
-// categoria/frente de gasto).
+// Por isso: uma linha em planejamento_pagamentos (item_id + mes) = pago
+// naquele mês; sem linha = em aberto. Lançar o gasto de verdade (botão
+// "lançar agora", Gastos, chat do COSMO) NÃO marca nada sozinho, e marcar
+// como pago NÃO cria lançamento — são duas coisas separadas de propósito.
+// Item fixo grava o valor_fixo do momento da marcação; item variável pede o
+// valor do mês na hora de marcar.
 
-export default function Planejamento({ familiaId, itens, lancamentos, frentesGasto, onAtualizado, onLancarAgora, onVoltar }) {
+export default function Planejamento({ familiaId, itens, pagamentos, frentesGasto, onAtualizado, onLancarAgora, onVoltar }) {
   const [mes, setMes] = useState(mesAtualISO());
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
+  // Item variável sendo marcado como pago: mostra o campo de valor embaixo
+  // da linha antes de gravar.
+  const [pagandoId, setPagandoId] = useState(null);
+  const [valorInformado, setValorInformado] = useState("");
+  const [salvandoPagId, setSalvandoPagId] = useState(null);
 
   const itensDoMes = useMemo(() => {
+    const pagamentoPorItem = new Map(
+      (pagamentos || []).filter((p) => p.mes.slice(0, 7) === mes).map((p) => [p.item_id, p])
+    );
     return itens
       .filter((i) => i.recorrente || (i.mes_especifico && i.mes_especifico.slice(0, 7) === mes))
       .map((i) => {
-        const lancamentosDoItem = lancamentos.filter(
-          (l) => l.tipo === "gasto" && !l.cartao_id && l.categoria === i.categoria && l.data.slice(0, 7) === mes
-        );
-        const pago = lancamentosDoItem.length > 0;
-        const valorReal = lancamentosDoItem.reduce((s, l) => s + Number(l.valor), 0);
-        return { ...i, pago, valorReal };
+        const pagamento = pagamentoPorItem.get(i.id);
+        return { ...i, pago: !!pagamento, valorReal: pagamento ? Number(pagamento.valor_pago) : 0 };
       })
       .sort((a, b) => {
         if (a.pago !== b.pago) return a.pago ? 1 : -1;
         const da = a.dia_vencimento ?? 99, db = b.dia_vencimento ?? 99;
         return da - db;
       });
-  }, [itens, lancamentos, mes]);
+  }, [itens, pagamentos, mes]);
 
   const totalPrevisto = itensDoMes.reduce((s, i) => s + (i.pago ? i.valorReal : Number(i.valor_fixo || 0)), 0);
   const totalPago = itensDoMes.filter((i) => i.pago).reduce((s, i) => s + i.valorReal, 0);
 
   function frenteDe(categoria) {
     return frentesGasto.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line, Icone: null, emoji: null };
+  }
+
+  // Grava "pago" pra (item, mês escolhido). upsert em (item_id, mes) — tocar
+  // duas vezes seguidas não duplica nem dá erro. `.select()` + checagem de
+  // linhas pelo mesmo motivo de sempre (RLS barrando vira "sucesso" com 0
+  // linhas).
+  async function gravarPago(item, valor) {
+    setSalvandoPagId(item.id);
+    try {
+      const { data, error } = await supabase
+        .from("planejamento_pagamentos")
+        .upsert({ familia_id: familiaId, item_id: item.id, mes: `${mes}-01`, valor_pago: valor }, { onConflict: "item_id,mes" })
+        .select();
+      if (error) {
+        const faltaMigracao = /planejamento_pagamentos|relation|does not exist|schema cache/i.test(error.message || "");
+        throw new Error(faltaMigracao ? "Não consegui marcar como pago — rode a migração 14 no Supabase (supabase-migracao-14-planejamento-pagamentos.sql)." : error.message);
+      }
+      if (!data || data.length === 0) throw new Error(`"${item.nome}" não foi marcado como pago — o banco não confirmou nenhuma alteração.`);
+      setPagandoId(null);
+      setValorInformado("");
+      onAtualizado();
+    } catch (e) {
+      alert(e.message || "Erro ao marcar como pago.");
+    } finally {
+      setSalvandoPagId(null);
+    }
+  }
+
+  function marcarPago(item) {
+    if (item.tipo_valor === "fixo") return gravarPago(item, Number(item.valor_fixo || 0));
+    // Variável: o valor muda todo mês, então pergunta antes de gravar.
+    setPagandoId(item.id);
+    setValorInformado("");
+  }
+
+  async function confirmarValorVariavel(item) {
+    const valor = Number(String(valorInformado).replace(",", "."));
+    if (!valorInformado || !Number.isFinite(valor) || valor < 0) return alert("Informe o valor pago neste mês.");
+    await gravarPago(item, valor);
+  }
+
+  async function desmarcarPago(item) {
+    setSalvandoPagId(item.id);
+    try {
+      const { data, error } = await supabase
+        .from("planejamento_pagamentos")
+        .delete()
+        .eq("item_id", item.id)
+        .eq("mes", `${mes}-01`)
+        .select();
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`"${item.nome}" não foi desmarcado — o banco não confirmou nenhuma alteração.`);
+      onAtualizado();
+    } catch (e) {
+      alert(e.message || "Erro ao desmarcar.");
+    } finally {
+      setSalvandoPagId(null);
+    }
   }
 
   async function excluir(id) {
@@ -112,8 +170,10 @@ export default function Planejamento({ familiaId, itens, lancamentos, frentesGas
           }
           const f = frenteDe(item.categoria);
           const Icone = f.Icone;
+          const salvandoEste = salvandoPagId === item.id;
           return (
-            <div key={item.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+            <div key={item.id} style={{ borderBottom: `1px solid ${C.line}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0" }}>
               <div style={{ width: 36, height: 36, borderRadius: 11, background: item.pago ? C.greenSoft : f.corSoft, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
                 {item.pago ? (
                   <IconCheck size={16} color={C.green} strokeWidth={2.3} />
@@ -135,20 +195,53 @@ export default function Planejamento({ familiaId, itens, lancamentos, frentesGas
                   {item.pago ? moeda(item.valorReal) : (item.tipo_valor === "fixo" ? moeda(item.valor_fixo) : "em aberto")}
                 </span>
                 {item.pago ? (
-                  <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> pago</span>
+                  <>
+                    <span style={{ fontSize: 10.5, fontWeight: 700, color: C.green, display: "flex", alignItems: "center", gap: 3 }}><IconCheck size={11} color={C.green} strokeWidth={2.5} /> pago</span>
+                    <button
+                      onClick={() => desmarcarPago(item)} disabled={salvandoEste}
+                      style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, fontWeight: 600, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+                    >
+                      {salvandoEste ? "…" : "desmarcar"}
+                    </button>
+                  </>
                 ) : (
-                  <button
-                    onClick={() => onLancarAgora && onLancarAgora(item)}
-                    style={{ border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 3 }}
-                  >
-                    <IconClock size={11} color={C.accent} strokeWidth={2.2} /> lançar agora
-                  </button>
+                  <>
+                    <button
+                      onClick={() => marcarPago(item)} disabled={salvandoEste}
+                      style={{ border: `1.5px solid ${C.green}`, background: "transparent", color: C.green, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: "3px 9px", borderRadius: 100, display: "flex", alignItems: "center", gap: 4 }}
+                    >
+                      <IconCheck size={11} color={C.green} strokeWidth={2.5} /> {salvandoEste ? "…" : "marcar pago"}
+                    </button>
+                    <button
+                      onClick={() => onLancarAgora && onLancarAgora(item)}
+                      style={{ border: "none", background: "transparent", color: C.accent, fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, display: "flex", alignItems: "center", gap: 3 }}
+                    >
+                      <IconClock size={11} color={C.accent} strokeWidth={2.2} /> lançar agora
+                    </button>
+                  </>
                 )}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 4, marginLeft: 4 }}>
                 <button onClick={() => setEditandoId(item.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>editar</button>
                 <button onClick={() => excluir(item.id)} style={{ border: "none", background: "transparent", color: C.inkFaint, fontSize: 11, cursor: "pointer" }}>excluir</button>
               </div>
+            </div>
+            {pagandoId === item.id && !item.pago && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "0 0 12px 48px", flexWrap: "wrap" }}>
+                <input
+                  style={{ ...campoInput, width: 130 }} type="number" step="0.01" min="0" inputMode="decimal"
+                  placeholder={`Valor de ${nomeMes(mes).split(" ")[0]}`} value={valorInformado} autoFocus
+                  onChange={(e) => setValorInformado(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmarValorVariavel(item); } }}
+                />
+                <button onClick={() => confirmarValorVariavel(item)} disabled={salvandoEste} style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+                  {salvandoEste ? "Salvando…" : "Confirmar pago"}
+                </button>
+                <button onClick={() => { setPagandoId(null); setValorInformado(""); }} style={{ padding: "8px 11px", borderRadius: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" }}>
+                  Cancelar
+                </button>
+              </div>
+            )}
             </div>
           );
         })}
@@ -231,7 +324,7 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, onSalvo, onCancelar
           <input style={{ ...campoInput, width: "100%", marginTop: 8 }} type="number" step="0.01" placeholder="0,00" value={valorFixo} onChange={(e) => setValorFixo(e.target.value)} />
         )}
         {tipoValor === "variavel" && (
-          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 6 }}>Sem valor fixo — quando você lançar o gasto de verdade, o valor de cada mês aparece aqui sozinho.</div>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 6 }}>Sem valor fixo — quando você marcar o item como pago, o app pergunta o valor daquele mês.</div>
         )}
       </div>
 

@@ -64,9 +64,11 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // fontesReceita.
   const [categorias, setCategorias] = useState([]);
   // Planejamento financeiro (migração 12, 25/09/2026) — "lembrete de
-  // boletos" pedido pelo Matheus, ver Planejamento.jsx pro raciocínio
-  // completo de como o "pago" é calculado (nunca gravado).
+  // boletos" pedido pelo Matheus. O "pago" de cada item é uma marcação manual
+  // por mês (migração 14, tabela planejamento_pagamentos) — ver
+  // Planejamento.jsx pro raciocínio completo.
   const [planejamentoItens, setPlanejamentoItens] = useState([]);
+  const [planejamentoPagamentos, setPlanejamentoPagamentos] = useState([]);
   // Categorização automática pelo COSMO (migração 12, 25/09/2026) — o
   // registro da própria família (só a coluna categorizacao_automatica
   // interessa aqui; RLS de UPDATE em "familias" já é dono-only, então o
@@ -96,7 +98,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     if (!silencioso) setCarregando(true);
     setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }, { data: planjPag, error: e10 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(300),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
@@ -106,6 +108,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         supabase.from("categorias").select("*").eq("familia_id", membro.familia_id).order("created_at"),
         supabase.from("planejamento_itens").select("*").eq("familia_id", membro.familia_id).order("created_at"),
         supabase.from("familias").select("*").eq("id", membro.familia_id).single(),
+        supabase.from("planejamento_pagamentos").select("*").eq("familia_id", membro.familia_id),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -125,6 +128,10 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       if (e7) console.error("Não consegui carregar categorias personalizadas (rodou a migração 10?):", e7.message);
       if (e8) console.error("Não consegui carregar o planejamento financeiro (rodou a migração 12?):", e8.message);
       if (e9) console.error("Não consegui carregar as configurações da família (rodou a migração 12?):", e9.message);
+      // planejamento_pagamentos (migração 14): mesma lógica — sem a migração,
+      // o planejamento abre normal com tudo "em aberto" e só avisa ao tentar
+      // marcar como pago.
+      if (e10) console.error("Não consegui carregar os pagamentos do planejamento (rodou a migração 14?):", e10.message);
       setLancamentos(lanc || []);
       setMembros(memb || []);
       setContas(cts || []);
@@ -133,6 +140,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       setInvestimentos(inv || []);
       setCategorias(cats || []);
       setPlanejamentoItens(planj || []);
+      setPlanejamentoPagamentos(planjPag || []);
       setFamiliaInfo(fam || null);
     } catch (e) {
       setErro(e.message || "Erro ao carregar dados.");
@@ -260,7 +268,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
               frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
-              lancamentos={lancamentos} planejamentoItens={planejamentoItens} onLancarAgora={lancarAgoraDoPlanejamento}
+              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} onLancarAgora={lancarAgoraDoPlanejamento}
               familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
@@ -274,7 +282,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, onLancarAgora, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const cartaoId = tela.split(":")[1];
     return (
@@ -324,7 +332,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   if (tela === "planejamento") {
     return (
       <Planejamento
-        familiaId={membro.familia_id} itens={planejamentoItens} lancamentos={lancamentos} frentesGasto={frentesGasto}
+        familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} frentesGasto={frentesGasto}
         onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onVoltar={() => setTela(null)}
       />
     );
