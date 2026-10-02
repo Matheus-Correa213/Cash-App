@@ -60,6 +60,30 @@ export default function Planejamento({ familiaId, itens, pagamentos, frentesGast
     return frentesGasto.find((f) => f.chave === categoria) || { chave: categoria, label: categoria, cor: C.inkMute, corSoft: C.line, Icone: null, emoji: null };
   }
 
+  // Itens agrupados por categoria (pedido do Matheus, 02/10/2026: "quero ver
+  // as categorias acima da linha dos lançamentos"). Cada grupo ganha um
+  // cabeçalho com o nome da categoria e o subtotal pago/previsto dela. Grupos
+  // com algo ainda em aberto vêm primeiro; grupo todo pago desce pro fim. No
+  // empate, vale a ordem das categorias na tela Categorias. Dentro do grupo
+  // mantém a ordem de itensDoMes (em aberto primeiro, depois por vencimento).
+  const grupos = useMemo(() => {
+    const porCategoria = new Map();
+    for (const i of itensDoMes) {
+      if (!porCategoria.has(i.categoria)) porCategoria.set(i.categoria, []);
+      porCategoria.get(i.categoria).push(i);
+    }
+    const posicao = (c) => { const idx = frentesGasto.findIndex((f) => f.chave === c); return idx === -1 ? 999 : idx; };
+    return [...porCategoria.entries()]
+      .map(([categoria, lista]) => ({
+        categoria,
+        itens: lista,
+        aberto: lista.some((i) => !i.pago),
+        previsto: lista.reduce((s, i) => s + (i.pago ? i.valorReal : Number(i.valor_fixo || 0)), 0),
+        pago: lista.filter((i) => i.pago).reduce((s, i) => s + i.valorReal, 0),
+      }))
+      .sort((a, b) => (a.aberto === b.aberto ? 0 : a.aberto ? -1 : 1) || posicao(a.categoria) - posicao(b.categoria));
+  }, [itensDoMes, frentesGasto]);
+
   // Grava "pago" pra (item, mês escolhido). upsert em (item_id, mes) — tocar
   // duas vezes seguidas não duplica nem dá erro. `.select()` + checagem de
   // linhas pelo mesmo motivo de sempre (RLS barrando vira "sucesso" com 0
@@ -137,8 +161,14 @@ export default function Planejamento({ familiaId, itens, pagamentos, frentesGast
             style={{ padding: "6px 10px", borderRadius: 9, border: "1.5px solid #5B3FD9", background: "#fff", color: "#5B3FD9", fontSize: 12.5, fontWeight: 700 }}
           />
         </div>
-        <div style={{ fontSize: 30, fontWeight: 800, color: "#5B3FD9", marginTop: 4 }}>{moeda(totalPago)} <span style={{ fontSize: 15, fontWeight: 700, color: "#5B3FD9AA" }}>de {moeda(totalPrevisto)}</span></div>
-        <div style={{ fontSize: 11.5, fontWeight: 600, color: "#5B3FD9", marginTop: 2 }}>pago até agora, do previsto pra este mês</div>
+        {/* Pedido do Matheus (02/10/2026): o número em destaque é o PREVISTO do
+            mês; o pago e o que falta ficam numa linha menor embaixo. */}
+        <div style={{ fontSize: 11.5, fontWeight: 700, color: "#5B3FD9AA", marginTop: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>Previsto pra este mês</div>
+        <div style={{ fontSize: 36, fontWeight: 800, color: "#5B3FD9", lineHeight: 1.1, marginTop: 2 }}>{moeda(totalPrevisto)}</div>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 10, fontSize: 12.5, fontWeight: 700, color: "#5B3FD9" }}>
+          <span>Pago {moeda(totalPago)}</span>
+          <span style={{ color: "#5B3FD9AA" }}>Falta {moeda(Math.max(0, totalPrevisto - totalPago))}</span>
+        </div>
       </div>
 
       {!mostrarForm && (
@@ -156,7 +186,18 @@ export default function Planejamento({ familiaId, itens, pagamentos, frentesGast
 
       <div style={{ background: C.card, border: `1px solid ${C.line}`, borderRadius: 16, padding: "6px 16px" }}>
         {itensDoMes.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5, padding: "14px 0" }}>Nenhum item de planejamento pra {nomeMes(mes)} ainda.</div>}
-        {itensDoMes.map((item) => {
+        {grupos.map((g) => {
+          const fg = frenteDe(g.categoria);
+          return (
+        <div key={g.categoria}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, padding: "14px 0 4px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 11.5, fontWeight: 800, letterSpacing: "0.05em", textTransform: "uppercase", color: fg.cor }}>
+              {fg.emoji ? <span style={{ fontSize: 14, lineHeight: 1 }}>{fg.emoji}</span> : fg.Icone && <fg.Icone size={14} color={fg.cor} strokeWidth={2} />}
+              {fg.label}
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint }}>{moeda(g.pago)} de {moeda(g.previsto)}</div>
+          </div>
+        {g.itens.map((item) => {
           if (editandoId === item.id) {
             return (
               <div key={item.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
@@ -185,10 +226,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, frentesGast
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.nome}</div>
-                <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>
-                  {f.label}{item.dia_vencimento ? ` · vence dia ${item.dia_vencimento}` : ""}{item.recorrente ? " · todo mês" : ""}
-                  {item.tipo_valor === "variavel" && !item.pago ? " · valor variável" : ""}
-                </div>
+                {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
                 <span style={{ fontSize: 14, fontWeight: 800, color: item.pago ? C.green : C.ink }}>
@@ -245,9 +283,22 @@ export default function Planejamento({ familiaId, itens, pagamentos, frentesGast
             </div>
           );
         })}
+        </div>
+          );
+        })}
       </div>
     </div>
   );
+}
+
+// Subtítulo de cada linha. A categoria NÃO entra mais aqui — ela virou o
+// cabeçalho do grupo, acima das linhas (ver `grupos` no componente).
+function subtituloDe(item) {
+  const partes = [];
+  if (item.dia_vencimento) partes.push(`vence dia ${item.dia_vencimento}`);
+  if (item.recorrente) partes.push("todo mês");
+  if (item.tipo_valor === "variavel" && !item.pago) partes.push("valor variável");
+  return partes.join(" · ");
 }
 
 // Formulário de criar/editar um item — nome, categoria, se o valor é fixo ou
