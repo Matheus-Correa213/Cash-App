@@ -176,7 +176,12 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
       // Acertos do cartão. Só mexe no que faz sentido e a pessoa deixou marcado.
       const ajustesCartao = {};
       if (zerarFaturaInicial && faturaInicial > 0) ajustesCartao.fatura_inicial = 0;
-      if (abaterLimite && lancarFuturas && limiteExtra > 0 && somaFuturas > 0) ajustesCartao.limite_comprometido_extra = Math.max(0, Math.round((limiteExtra - somaFuturas) * 100) / 100);
+      // Com a fatura importada e as parcelas futuras lançadas, o app conhece TODAS as
+      // parcelas em andamento (toda compra parcelada ativa aparece na fatura atual); o
+      // "limite preso" que cobria as desconhecidas some por inteiro. Só abater as futuras
+      // deixava um resto contando a mesma dívida duas vezes (disponível R$ 796 no app
+      // contra ~R$ 2.800 no banco).
+      if (abaterLimite && lancarFuturas && limiteExtra > 0 && somaFuturas > 0) ajustesCartao.limite_comprometido_extra = 0;
       let avisoCartao = "";
       if (Object.keys(ajustesCartao).length) {
         const { data, error } = await supabase.from("cartoes_credito").update(ajustesCartao).eq("id", cartao.id).select("id");
@@ -232,7 +237,7 @@ export default function ImportarOFXCartao({ cartao, membro, onVoltar, onConcluid
             {concluido.futuras > 0 && `, ${concluido.futuras} ${concluido.futuras === 1 ? "parcela futura" : "parcelas futuras"}`}
             {concluido.ajustadas > 0 && `, ${concluido.ajustadas} ${concluido.ajustadas === 1 ? "valor corrigido" : "valores corrigidos"}`}.
             {concluido.ajustesCartao?.fatura_inicial === 0 && " Fatura inicial zerada (agora as compras reais estão aqui)."}
-            {concluido.ajustesCartao?.limite_comprometido_extra != null && ` Limite preso em parcelas: ${moeda(concluido.ajustesCartao.limite_comprometido_extra)}.`}
+            {concluido.ajustesCartao?.limite_comprometido_extra === 0 && " Limite preso em parcelas zerado (agora as parcelas reais estão lançadas)."}
           </div>
           {concluido.falhas > 0 && <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: C.danger }}>{concluido.falhas} correção(ões) de valor não foram confirmadas pelo banco.</div>}
           {concluido.aviso && <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: C.danger }}>{concluido.aviso}</div>}
@@ -358,8 +363,8 @@ function Previa({ analise, cartao, marcados, setMarcados, lancarFuturas, setLanc
           )}
           {limiteExtra > 0 && nFuturasMarcadas > 0 && lancarFuturas && (
             <Opcao ativo={abaterLimite} onToggle={() => setAbaterLimite((v) => !v)}
-              titulo={`Abater do "limite preso em parcelas" (${moeda(limiteExtra)} → ${moeda(Math.max(0, limiteExtra - futurasDosMarcados))})`}
-              texto="Esse valor representava parcelas que o app ainda não conhecia. As que você acabou de lançar agora contam por conta própria — sem abater, o limite disponível ficaria menor do que é." />
+              titulo={`Zerar o "limite preso em parcelas" (${moeda(limiteExtra)} → R$ 0,00)`}
+              texto="Esse valor era um palpite pras parcelas que o app não conhecia. Com a fatura importada e as parcelas futuras lançadas, o app conhece todas — mantê-lo (ou só abater) contaria a mesma dívida duas vezes e o limite disponível ficaria menor do que é." />
           )}
         </div>
       )}
