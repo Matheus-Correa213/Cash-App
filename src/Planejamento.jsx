@@ -39,7 +39,7 @@ import { itensDoMesComFaturas } from "./planejamentoCalculo.js";
 // Mudar o valor de outubro não mexe em novembro. Tocar no valor da linha abre
 // o ajuste rápido (valor do mês, ou o valor pago se o item já está pago).
 
-const MODO = { PAGAR: "pagar", VALOR_MES: "valorMes", AJUSTAR_PAGO: "ajustarPago", DATA: "data" };
+const MODO = { PAGAR: "pagar", VALOR_MES: "valorMes", AJUSTAR_PAGO: "ajustarPago" };
 
 function lerValor(str) {
   if (str === "" || str == null) return null;
@@ -52,7 +52,7 @@ function mensagemTabelaFaltando(error, tabela, migracao, acao) {
   return faltando ? `${acao} — rode a migração ${migracao} no Supabase.` : error?.message || acao;
 }
 
-export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, frentesGasto, cartoes, lancamentosCartao, onAtualizado, onLancarAgora, onPerguntarCosmo, onAbrirCartao, onVoltar }) {
+export default function Planejamento({ familiaId, itens, pagamentos, valoresMes, vencimentosMes, frentesGasto, cartoes, lancamentosCartao, onAtualizado, onLancarAgora, onPerguntarCosmo, onAbrirCartao, onVoltar }) {
   const [mes, setMes] = useState(mesAtualISO());
   const [mostrarForm, setMostrarForm] = useState(false);
   const [editandoId, setEditandoId] = useState(null);
@@ -69,8 +69,8 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   // Itens digitados + a fatura de cada cartão (calculada ao vivo dos lançamentos
   // do cartão — ver faturasDeCartaoDoMes em planejamentoCalculo.js).
   const itensDoMes = useMemo(
-    () => itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes }),
-    [itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes]
+    () => itensDoMesComFaturas({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, mes }),
+    [itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, mes]
   );
 
   const totalPrevisto = itensDoMes.reduce((s, i) => s + i.previstoSoma, 0);
@@ -80,6 +80,9 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   const nSemValor = itensDoMes.filter((i) => !i.pago && i.previsto == null).length;
   const avisosTopo = [];
   if (nAproximados) avisosTopo.push(`inclui ${nAproximados} ${nAproximados === 1 ? "valor aproximado" : "valores aproximados"}`);
+  // Venceu em mês anterior (mês do vencimento escolhido ao editar) e não foi pago.
+  const nVencidosAntes = itensDoMes.filter((i) => !i.pago && i.vencidoAntes).length;
+  if (nVencidosAntes) avisosTopo.unshift(`${nVencidosAntes} ${nVencidosAntes === 1 ? "item venceu" : "itens venceram"} em mês anterior`);
   const nFaturasAbertas = itensDoMes.filter((i) => i.ehCartao && i.aberta).length;
   if (nFaturasAbertas) avisosTopo.push(`${nFaturasAbertas} ${nFaturasAbertas === 1 ? "fatura de cartão ainda recebendo compras" : "faturas de cartão ainda recebendo compras"}`);
   if (nSemValor) avisosTopo.push(`${nSemValor} ${nSemValor === 1 ? "item sem valor" : "itens sem valor"} (fora da soma)`);
@@ -122,24 +125,28 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
   // em aberto está atrasado; num mês futuro ainda não venceu nada).
   const gruposVencimento = useMemo(() => {
     const hoje = new Date();
-    const mesHoje = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}`;
-    const diaHoje = hoje.getDate();
-    const ordem = (a, b) => (a.dia_vencimento ?? 99) - (b.dia_vencimento ?? 99) || a.nome.localeCompare(b.nome);
+    const pad2 = (n) => String(n).padStart(2, "0");
+    const isoDe = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const hojeISO = isoDe(hoje);
+    const mesHoje = hojeISO.slice(0, 7);
+    const em7 = isoDe(new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate() + 7));
+    // Data de vencimento "de verdade": a de outro mês (mês do vencimento escolhido
+    // ao editar), ou o dia do item dentro do mês que está na tela.
+    const dataDe = (i) => i.vencimentoOutroMes || `${mes}-${pad2(i.dia_vencimento)}`;
+    const ordem = (a, b) => dataDe(a).localeCompare(dataDe(b)) || a.nome.localeCompare(b.nome);
     const comData = itensDoMes.filter((i) => i.dia_vencimento != null);
     const semData = itensDoMes.filter((i) => i.dia_vencimento == null);
     const abertos = comData.filter((i) => !i.pago).sort(ordem);
     const pagos = comData.filter((i) => i.pago).sort(ordem);
     const nomeDoMesLocal = nomeMes(mes).split(" ")[0];
     const lista = [];
-    if (mes < mesHoje) {
-      lista.push({ chave: "atrasados", titulo: "Atrasados", cor: C.coralText, itens: abertos });
-    } else if (mes === mesHoje) {
-      lista.push({ chave: "atrasados", titulo: "Atrasados", cor: C.coralText, itens: abertos.filter((i) => i.dia_vencimento < diaHoje) });
-      lista.push({ chave: "hoje", titulo: "Vence hoje", cor: C.amberText, itens: abertos.filter((i) => i.dia_vencimento === diaHoje) });
-      lista.push({ chave: "semana", titulo: "Próximos 7 dias", cor: C.accent, itens: abertos.filter((i) => i.dia_vencimento > diaHoje && i.dia_vencimento <= diaHoje + 7) });
-      lista.push({ chave: "depois", titulo: "Mais pra frente neste mês", cor: C.inkMute, itens: abertos.filter((i) => i.dia_vencimento > diaHoje + 7) });
-    } else {
-      lista.push({ chave: "mes", titulo: `Vencimentos de ${nomeDoMesLocal}`, cor: C.accent, itens: abertos });
+    lista.push({ chave: "atrasados", titulo: "Atrasados", cor: C.coralText, itens: abertos.filter((i) => dataDe(i) < hojeISO) });
+    if (mes === mesHoje) {
+      lista.push({ chave: "hoje", titulo: "Vence hoje", cor: C.amberText, itens: abertos.filter((i) => dataDe(i) === hojeISO) });
+      lista.push({ chave: "semana", titulo: "Próximos 7 dias", cor: C.accent, itens: abertos.filter((i) => dataDe(i) > hojeISO && dataDe(i) <= em7) });
+      lista.push({ chave: "depois", titulo: "Mais pra frente neste mês", cor: C.inkMute, itens: abertos.filter((i) => dataDe(i) > em7) });
+    } else if (mes > mesHoje) {
+      lista.push({ chave: "mes", titulo: `Vencimentos de ${nomeDoMesLocal}`, cor: C.accent, itens: abertos.filter((i) => dataDe(i) >= hojeISO) });
     }
     lista.push({ chave: "pagos", titulo: "Pagos", cor: C.green, itens: pagos, pagos: true });
     lista.push({ chave: "semdata", titulo: "Sem data · pessoais", cor: C.purple, itens: semData, semData: true });
@@ -161,7 +168,6 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     if (modo === MODO.PAGAR) inicial = item.previsto != null ? item.previsto : "";
     else if (modo === MODO.VALOR_MES) inicial = item.previsto != null ? item.previsto : "";
     else if (modo === MODO.AJUSTAR_PAGO) inicial = item.valorReal;
-    else if (modo === MODO.DATA) inicial = item.dia_vencimento ?? "";
     setPainel({ id: item.id, modo });
     setValorInformado(String(inicial));
   }
@@ -232,32 +238,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     }
   }
 
-  // Coloca (ou muda/tira) o dia de vencimento do item, direto da linha — pedido do
-  // Matheus (02/10/2026): "tem coisas que podem já ter vencido, é bom poder colocar
-  // as datas". Vale pro item (todo mês); com data, ele passa a poder aparecer como
-  // atrasado / vence hoje / próximos 7 dias.
-  async function gravarData(item, dia) {
-    setSalvandoId(item.id);
-    try {
-      const { data, error } = await supabase.from("planejamento_itens").update({ dia_vencimento: dia }).eq("id", item.id).select("id");
-      if (error) throw error;
-      if (!data || data.length === 0) throw new Error(`"${item.nome}" não foi atualizado — o banco não confirmou nenhuma alteração.`);
-      fecharPainel();
-      onAtualizado();
-    } catch (e) {
-      alert(e.message || "Erro ao salvar a data.");
-    } finally {
-      setSalvandoId(null);
-    }
-  }
-
   async function confirmarPainel(item) {
-    if (painel?.modo === MODO.DATA) {
-      const t = String(valorInformado).trim();
-      const dia = Number(t);
-      if (!t || !Number.isInteger(dia) || dia < 1 || dia > 31) return alert("Informe o dia do vencimento (de 1 a 31).");
-      return gravarData(item, dia);
-    }
     const valor = lerValor(valorInformado);
     if (valor == null) {
       return alert(painel?.modo === MODO.VALOR_MES ? `Informe o valor de ${nomeDoMes}.` : "Informe o valor pago neste mês.");
@@ -328,7 +309,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
       return (
         <div key={item.id} style={{ padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
           <FormItem
-            familiaId={familiaId} frentesGasto={frentesGasto} mesAtual={mes} item={item} valorDoMes={item.valorMes}
+            familiaId={familiaId} frentesGasto={frentesGasto} mesAtual={mes} item={item} valorDoMes={item.valorMes} vencimentoDoMes={item.vencimentoOutroMes}
             onSalvo={() => { setEditandoId(null); onAtualizado(); }}
             onCancelar={() => setEditandoId(null)}
           />
@@ -365,14 +346,11 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
           )}
         </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.nome}</div>
-          {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
-          <button
-            type="button" onClick={() => abrirPainel(item, MODO.DATA)}
-            style={{ border: "none", background: "transparent", padding: 0, marginTop: 2, cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.accent, textDecoration: "underline dotted", textUnderlineOffset: 3 }}
-          >
-            {item.dia_vencimento ? "mudar a data" : "＋ colocar data de vencimento"}
-          </button>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>
+            {item.nome}
+            {item.vencidoAntes && <span style={{ marginLeft: 8, background: C.coralSoft || "#FDECEC", color: C.coralText, borderRadius: 100, padding: "2px 8px", fontSize: 10, fontWeight: 800, letterSpacing: "0.04em" }}>VENCIDO</span>}
+          </div>
+          {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: item.vencidoAntes ? C.coralText : C.inkFaint }}>{subtituloDe(item)}</div>}
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           {/* Tocar no valor abre o ajuste rápido (ver `acaoValor`). Item
@@ -430,33 +408,25 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
       {painelAberto && (
         <div style={{ padding: "0 0 12px 48px" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, marginBottom: 6 }}>
-            {painelAberto === MODO.DATA ? (item.recorrente ? "Dia do vencimento (todo mês)" : "Dia do vencimento") : painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
+            {painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <input
-              style={{ ...campoInput, width: 104 }} type="number" step={painelAberto === MODO.DATA ? "1" : "0.01"} min={painelAberto === MODO.DATA ? "1" : "0"} max={painelAberto === MODO.DATA ? "31" : undefined} inputMode={painelAberto === MODO.DATA ? "numeric" : "decimal"}
-              placeholder={painelAberto === MODO.DATA ? "dia" : "0,00"} value={valorInformado} autoFocus
+              style={{ ...campoInput, width: 104 }} type="number" step="0.01" min="0" inputMode="decimal"
+              placeholder="0,00" value={valorInformado} autoFocus
               onChange={(e) => setValorInformado(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmarPainel(item); } }}
             />
             <button
               onClick={() => confirmarPainel(item)} disabled={salvandoEste}
-              style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES || painelAberto === MODO.DATA ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+              style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
             >
-              {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : painelAberto === MODO.DATA ? "Salvar data" : "Salvar valor pago"}
+              {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : "Salvar valor pago"}
             </button>
             <button onClick={fecharPainel} style={{ padding: "8px 11px", borderRadius: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" }}>
               Cancelar
             </button>
           </div>
-          {painelAberto === MODO.DATA && item.dia_vencimento != null && (
-            <button
-              onClick={() => gravarData(item, null)} disabled={salvandoEste}
-              style={{ marginTop: 8, border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline" }}
-            >
-              Tirar a data (vira "sem data")
-            </button>
-          )}
           {painelAberto === MODO.VALOR_MES && item.valorMes != null && (
             <button
               onClick={() => removerValorMes(item)} disabled={salvandoEste}
@@ -582,7 +552,11 @@ function subtituloDe(item) {
     return p.join(" · ");
   }
   const partes = [];
-  if (item.dia_vencimento) partes.push(`vence dia ${item.dia_vencimento}`);
+  if (item.vencimentoOutroMes) {
+    // Vencimento em OUTRO mês (ex: 28/09 numa conta de outubro): mostra a data completa.
+    const [a, m, d] = item.vencimentoOutroMes.split("-");
+    partes.push(`${item.pago ? "venceu" : item.vencidoAntes ? "VENCEU" : "vence"} ${d}/${m}/${a}`);
+  } else if (item.dia_vencimento) partes.push(`vence dia ${item.dia_vencimento}`);
   if (item.recorrente) partes.push("todo mês");
   else if (item.mes_especifico) partes.push(`só em ${nomeMes(item.mes_especifico.slice(0, 7)).split(" ")[0]}`);
   if (!item.pago) {
@@ -608,7 +582,7 @@ function subtituloDe(item) {
 // valor APROXIMADO opcional pros meses em que ainda não se sabe o real e, só
 // aqui, o campo "Valor de <mês>": o valor específico do mês que está aberto na
 // tela (migração 15), que vale só pra ele.
-function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo, onCancelar }) {
+function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, vencimentoDoMes, onSalvo, onCancelar }) {
   const [nome, setNome] = useState(item?.nome || "");
   const [categoria, setCategoria] = useState(item?.categoria || frentesGasto[0]?.chave || "");
   const [tipoValor, setTipoValor] = useState(item?.tipo_valor || "fixo");
@@ -617,9 +591,28 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
   const [diaVencimento, setDiaVencimento] = useState(item?.dia_vencimento != null ? String(item.dia_vencimento) : "");
   const [recorrente, setRecorrente] = useState(item ? !!item.recorrente : true);
   const [mesEspecifico, setMesEspecifico] = useState(item?.mes_especifico ? item.mes_especifico.slice(0, 7) : mesAtual);
+  // Mês do vencimento (migração 17): por padrão é o mês em edição; dá pra trocar
+  // por um mês ANTERIOR — aí o item aparece como vencido e vira prioridade.
+  const [mesVencEscolhido, setMesVencEscolhido] = useState(vencimentoDoMes ? vencimentoDoMes.slice(0, 7) : null);
   const [erro, setErro] = useState("");
   const [salvando, setSalvando] = useState(false);
   const rotuloMes = nomeMes(mesAtual);
+  const refMes = recorrente ? mesAtual : mesEspecifico; // mês em que o item aparece
+  const mesVenc = mesVencEscolhido && mesVencEscolhido < refMes ? mesVencEscolhido : refMes;
+  const venceOutroMes = mesVenc !== refMes;
+  const opcoesMesVenc = (() => {
+    const [a, m] = (refMes || mesAtual).split("-").map(Number);
+    const lista = [];
+    for (let k = 0; k <= 6; k++) lista.push(new Date(Date.UTC(a, m - 1 - k, 1)).toISOString().slice(0, 7));
+    if (mesVenc && !lista.includes(mesVenc)) lista.push(mesVenc);
+    return lista;
+  })();
+  const rotuloMesVenc = (ym) => { const n = nomeMes(ym); return n.charAt(0).toUpperCase() + n.slice(1); };
+  function trocarMesVenc(ym) {
+    setMesVencEscolhido(ym === refMes ? null : ym);
+    // Voltou pro mês padrão: o dia volta a ser o do próprio item (o do mês anterior era só daquele mês).
+    if (ym === refMes && recorrente) setDiaVencimento(item?.diaDoItem != null ? String(item.diaDoItem) : "");
+  }
   // "Valor de <mês>" só existe pra item variável que aparece todo mês.
   const usaValorDoMes = recorrente && tipoValor === "variavel";
 
@@ -631,6 +624,9 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
     if (recorrente && tipoValor === "fixo" && (!valorFixo || Number(valorFixo) <= 0)) { setErro("Informe o valor fixo, ou troque pra \"valor variável\"."); return; }
     if (valorFixo !== "" && lerValor(valorFixo) == null) { setErro(recorrente ? "O valor aproximado precisa ser um número válido." : "O valor precisa ser um número válido."); return; }
     if (usaValorDoMes && valorMesStr !== "" && lerValor(valorMesStr) == null) { setErro(`O valor de ${rotuloMes} precisa ser um número válido.`); return; }
+    const diaNum = diaVencimento ? Number(diaVencimento) : null;
+    if (diaNum != null && (!Number.isInteger(diaNum) || diaNum < 1 || diaNum > 31)) { setErro("O dia de vencimento precisa ser de 1 a 31."); return; }
+    if (venceOutroMes && diaNum == null) { setErro(`Informe o dia do vencimento em ${rotuloMesVenc(mesVenc)}.`); return; }
     setSalvando(true);
     try {
       const payload = {
@@ -642,7 +638,9 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
         // Fixo: o valor de sempre. Variável: o valor aproximado (opcional).
         // Um mês só: o valor do item (opcional).
         valor_fixo: valorFixo !== "" ? Number(valorFixo) : null,
-        dia_vencimento: diaVencimento ? Number(diaVencimento) : null,
+        // Item que aparece todo mês e venceu em outro mês neste mês: o dia digitado é só
+        // desse mês (vai pra planejamento_vencimentos_mes) — o dia de sempre do item não muda.
+        dia_vencimento: recorrente && venceOutroMes ? (item?.diaDoItem ?? null) : diaNum,
         recorrente,
         mes_especifico: recorrente ? null : `${mesEspecifico}-01`,
       };
@@ -682,8 +680,33 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
           avisoMes = e2.message;
         }
       }
+      // Mês do vencimento: só mexe se mudou. Mês anterior → grava a data completa;
+      // voltou pro padrão (e existia) → remove. Falhou: o item já foi salvo — avisa e segue.
+      const antesVenc = vencimentoDoMes ? vencimentoDoMes.slice(0, 10) : null;
+      let avisoVenc = "";
+      try {
+        if (venceOutroMes) {
+          const [ay, am] = mesVenc.split("-").map(Number);
+          const ultimo = new Date(Date.UTC(ay, am, 0)).getUTCDate();
+          const novo = `${mesVenc}-${String(Math.min(diaNum, ultimo)).padStart(2, "0")}`;
+          if (novo !== antesVenc) {
+            const { data, error } = await supabase
+              .from("planejamento_vencimentos_mes")
+              .upsert({ familia_id: familiaId, item_id: itemId, mes: `${refMes}-01`, vencimento: novo }, { onConflict: "item_id,mes" })
+              .select();
+            if (error) throw new Error(mensagemTabelaFaltando(error, "planejamento_vencimentos_mes", 17, "O item foi salvo, mas não consegui salvar o mês do vencimento"));
+            if (!data || data.length === 0) throw new Error("O item foi salvo, mas o banco não confirmou o mês do vencimento.");
+          }
+        } else if (antesVenc) {
+          const { error } = await supabase.from("planejamento_vencimentos_mes").delete().eq("item_id", itemId).eq("mes", `${refMes}-01`).select();
+          if (error) throw new Error(mensagemTabelaFaltando(error, "planejamento_vencimentos_mes", 17, "O item foi salvo, mas não consegui voltar o vencimento pro mês padrão"));
+        }
+      } catch (e3) {
+        avisoVenc = e3.message;
+      }
       onSalvo();
       if (avisoMes) alert(avisoMes);
+      if (avisoVenc) alert(avisoVenc);
     } catch (e) {
       setErro(e.message || "Erro ao salvar.");
     } finally {
@@ -749,10 +772,21 @@ function FormItem({ familiaId, frentesGasto, mesAtual, item, valorDoMes, onSalvo
       )}
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <div style={{ flex: "1 1 140px" }}>
-          <Label>Dia de vencimento</Label>
+        <div style={{ flex: "1 1 120px" }}>
+          <Label>{recorrente && venceOutroMes ? `Dia (só em ${rotuloMesVenc(mesVenc).split(" ")[0]})` : "Dia de vencimento"}</Label>
           <input style={{ ...campoInput, width: "100%", marginTop: 4, boxSizing: "border-box" }} type="number" min={1} max={31} placeholder="ex: 10" value={diaVencimento} onChange={(e) => setDiaVencimento(e.target.value)} />
         </div>
+        <div style={{ flex: "2 1 170px" }}>
+          <Label>Mês do vencimento</Label>
+          <select aria-label="Mês do vencimento" style={{ ...campoInput, width: "100%", marginTop: 4 }} value={mesVenc} onChange={(e) => trocarMesVenc(e.target.value)}>
+            {opcoesMesVenc.map((ym) => <option key={ym} value={ym}>{rotuloMesVenc(ym)}{ym === refMes ? " (padrão)" : ""}</option>)}
+          </select>
+        </div>
+        {venceOutroMes && (
+          <div style={{ flexBasis: "100%", fontSize: 11.5, fontWeight: 700, color: C.coralText }}>
+            Venceu em {rotuloMesVenc(mesVenc)}: o item aparece como VENCIDO e sobe como prioridade de pagamento{recorrente ? ` (só em ${rotuloMes}, os outros meses não mudam)` : ""}.
+          </div>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 8 }}>

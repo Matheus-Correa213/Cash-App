@@ -8,12 +8,17 @@
 
 import { mesDaFatura } from "./theme.js";
 
-export function calcularItensDoMes(itens, pagamentos, valoresMes, mes) {
+export function calcularItensDoMes(itens, pagamentos, valoresMes, mes, vencimentosMes) {
   const pagamentoPorItem = new Map(
     (pagamentos || []).filter((p) => p.mes.slice(0, 7) === mes).map((p) => [p.item_id, p])
   );
   const valorMesPorItem = new Map(
     (valoresMes || []).filter((v) => v.mes.slice(0, 7) === mes).map((v) => [v.item_id, Number(v.valor)])
+  );
+  // Vencimento de verdade num OUTRO mês (migração 17): "a conta de outubro que
+  // venceu em 28/09". Vale só pro mês em que o item aparece.
+  const vencimentoPorItem = new Map(
+    (vencimentosMes || []).filter((v) => v.mes.slice(0, 7) === mes).map((v) => [v.item_id, String(v.vencimento).slice(0, 10)])
   );
   return itens
     .filter((i) => i.recorrente || (i.mes_especifico && i.mes_especifico.slice(0, 7) === mes))
@@ -26,8 +31,16 @@ export function calcularItensDoMes(itens, pagamentos, valoresMes, mes) {
       const padrao = i.valor_fixo != null ? Number(i.valor_fixo) : null;
       const previsto = valorMes != null ? valorMes : padrao; // null = sem valor nenhum
       const valorReal = pagamento ? Number(pagamento.valor_pago) : 0;
+      const vencOutroMes = vencimentoPorItem.get(i.id) || null; // "YYYY-MM-DD" ou null
       return {
         ...i,
+        // dia_vencimento aqui já é o EFETIVO (o do vencimento de outro mês, se houver);
+        // o dia que está cadastrado no item fica em diaDoItem (o formulário usa esse).
+        diaDoItem: i.dia_vencimento ?? null,
+        dia_vencimento: vencOutroMes ? Number(vencOutroMes.slice(8, 10)) : i.dia_vencimento,
+        vencimentoOutroMes: vencOutroMes,
+        // Venceu antes do mês do planejamento e ainda não foi pago = VENCIDO, prioridade.
+        vencidoAntes: !!vencOutroMes && vencOutroMes.slice(0, 7) < mes && !pagamento,
         pago: !!pagamento,
         valorReal,
         valorMes,
@@ -39,24 +52,31 @@ export function calcularItensDoMes(itens, pagamentos, valoresMes, mes) {
         previstoSoma: previsto != null ? previsto : valorReal,
       };
     })
-    .sort((a, b) => {
-      if (a.pago !== b.pago) return a.pago ? 1 : -1;
-      const da = a.dia_vencimento ?? 99, db = b.dia_vencimento ?? 99;
-      return da - db;
-    });
+    .sort(comparaPrioridade);
+}
+
+// Em aberto antes dos pagos; dentro dos em aberto, os VENCIDOS de mês anterior
+// primeiro (mais antigo primeiro), depois por dia de vencimento.
+export function comparaPrioridade(a, b) {
+  if (a.pago !== b.pago) return a.pago ? 1 : -1;
+  if (!!a.vencidoAntes !== !!b.vencidoAntes) return a.vencidoAntes ? -1 : 1;
+  if (a.vencidoAntes && b.vencidoAntes) return a.vencimentoOutroMes.localeCompare(b.vencimentoOutroMes);
+  return (a.dia_vencimento ?? 99) - (b.dia_vencimento ?? 99);
 }
 
 // Resumo compacto pro COSMO (vai no corpo do POST do /api/chat). `meses` são
 // "YYYY-MM"; cada item leva só o que importa pra decidir estratégia de
 // pagamento: vencimento, valor previsto, se é aproximado, se já foi pago.
-export function resumoPlanejamentoParaCosmo({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, frentesGasto, meses }) {
+export function resumoPlanejamentoParaCosmo({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, frentesGasto, meses }) {
   const rotulo = (c) => (c === "__cartao__" ? "Cartão de crédito" : (frentesGasto || []).find((f) => f.chave === c)?.label || c);
   return meses.map((mes) => ({
     mes,
-    itens: itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes }).map((i) => ({
+    itens: itensDoMesComFaturas({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, mes }).map((i) => ({
       nome: i.nome,
       categoria: rotulo(i.categoria),
       dia_vencimento: i.dia_vencimento ?? null, // null = sem data (coisa pessoal, sem vencimento fixo)
+      // Venceu em OUTRO mês (anterior) e não foi pago: data completa + marca de vencido.
+      ...(i.vencimentoOutroMes ? { data_vencimento: i.vencimentoOutroMes, vencido_de_mes_anterior: !!i.vencidoAntes } : {}),
       recorrencia: i.ehCartao ? "fatura do cartão" : i.recorrente ? "todo mês" : "só neste mês",
       valor_previsto: i.previsto,               // null = ainda sem valor
       valor_aproximado: !!i.aproximado,
@@ -69,10 +89,7 @@ export function resumoPlanejamentoParaCosmo({ itens, pagamentos, valoresMes, car
 
 // Ordem de uma lista do planejamento: em aberto primeiro, depois por vencimento.
 export function ordenarItens(lista) {
-  return [...lista].sort((a, b) => {
-    if (a.pago !== b.pago) return a.pago ? 1 : -1;
-    return (a.dia_vencimento ?? 99) - (b.dia_vencimento ?? 99);
-  });
+  return [...lista].sort(comparaPrioridade);
 }
 
 // FATURA DO CARTÃO no planejamento (pedido do Matheus, 02/10/2026: "aparecer a
@@ -123,9 +140,9 @@ export function faturasDeCartaoDoMes({ cartoes, lancamentosCartao, mes, hoje = n
 }
 
 // Itens do mês já com as faturas dos cartões — o que a tela e o COSMO usam.
-export function itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes, hoje }) {
+export function itensDoMesComFaturas({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, mes, hoje }) {
   return ordenarItens([
-    ...calcularItensDoMes(itens || [], pagamentos || [], valoresMes || [], mes),
+    ...calcularItensDoMes(itens || [], pagamentos || [], valoresMes || [], mes, vencimentosMes || []),
     ...faturasDeCartaoDoMes({ cartoes, lancamentosCartao, mes, hoje }),
   ]);
 }
@@ -140,7 +157,7 @@ export function itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, l
 // (o que entrou, o que saiu, o que mudou de valor). Compras de cartão ainda não
 // feitas NÃO existem aqui — as faturas dos meses de frente só têm parcelas e
 // compras já lançadas, então tendem a ser menores do que serão de verdade.
-export function projecaoMensal({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, frentesGasto, mesInicial, quantidade = 12, hoje }) {
+export function projecaoMensal({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, frentesGasto, mesInicial, quantidade = 12, hoje }) {
   const somar = (ym, n) => { const [a, m] = ym.split("-").map(Number); return new Date(Date.UTC(a, m - 1 + n, 1)).toISOString().slice(0, 7); };
   const arred = (n) => Math.round(n * 100) / 100;
   const rotulo = (c) => (frentesGasto || []).find((f) => f.chave === c)?.label || c;
@@ -148,7 +165,7 @@ export function projecaoMensal({ itens, pagamentos, valoresMes, cartoes, lancame
   let anterior = null;
   for (let k = 0; k < quantidade; k++) {
     const mes = somar(mesInicial, k);
-    const todos = itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes, hoje });
+    const todos = itensDoMesComFaturas({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, mes, hoje });
     const boletos = todos.filter((i) => !i.ehCartao);
     const faturas = todos.filter((i) => i.ehCartao);
     const totalBoletos = boletos.reduce((s, i) => s + (i.previstoSoma || 0), 0);

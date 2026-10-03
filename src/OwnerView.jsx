@@ -72,6 +72,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   // Valor planejado de cada item em cada mês (migração 15) — vale por cima
   // do valor padrão/aproximado do item.
   const [planejamentoValoresMes, setPlanejamentoValoresMes] = useState([]);
+  const [planejamentoVencimentosMes, setPlanejamentoVencimentosMes] = useState([]);
   // Compras de cartão (todas, inclusive faturas já pagas e parcelas futuras),
   // carregadas à parte: `lancamentos` abaixo tem teto de linhas e as parcelas
   // futuras (datas à frente) ocupariam o topo da lista e empurrariam o
@@ -109,7 +110,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
     if (!silencioso) setCarregando(true);
     setErro("");
     try {
-      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }, { data: planjPag, error: e10 }, { data: planjVal, error: e11 }, { data: lcar, error: e12 }] = await Promise.all([
+      const [{ data: lanc, error: e1 }, { data: memb, error: e2 }, { data: cts, error: e3 }, { data: crt, error: e4 }, { data: assn, error: e5 }, { data: inv, error: e6 }, { data: cats, error: e7 }, { data: planj, error: e8 }, { data: fam, error: e9 }, { data: planjPag, error: e10 }, { data: planjVal, error: e11 }, { data: lcar, error: e12 }, { data: planjVenc, error: e13 }] = await Promise.all([
         supabase.from("lancamentos").select("*").order("data", { ascending: false }).order("created_at", { ascending: false }).limit(1000),
         supabase.from("membros").select("*").eq("familia_id", membro.familia_id).order("papel", { ascending: false }),
         supabase.from("contas").select("*").eq("familia_id", membro.familia_id).order("nome"),
@@ -122,6 +123,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
         supabase.from("planejamento_pagamentos").select("*").eq("familia_id", membro.familia_id),
         supabase.from("planejamento_valores_mes").select("*").eq("familia_id", membro.familia_id),
         supabase.from("lancamentos").select("id, cartao_id, valor, data, fatura_paga").eq("tipo", "gasto").not("cartao_id", "is", null).order("data", { ascending: false }).limit(5000),
+        supabase.from("planejamento_vencimentos_mes").select("*").eq("familia_id", membro.familia_id),
       ]);
       if (e1) throw e1;
       if (e2) throw e2;
@@ -159,6 +161,9 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
       setPlanejamentoItens(planj || []);
       setPlanejamentoPagamentos(planjPag || []);
       setPlanejamentoValoresMes(planjVal || []);
+      // planejamento_vencimentos_mes (migração 17): sem a migração o planejamento abre normal; só avisa ao tentar usar o mês do vencimento.
+      if (e13) console.error("Não consegui carregar os vencimentos de outro mês do planejamento (rodou a migração 17?):", e13.message);
+      setPlanejamentoVencimentosMes(planjVenc || []);
       if (e12) console.error("Não consegui carregar as compras de cartão pro planejamento:", e12.message);
       setLancamentosCartao(lcar || []);
       setFamiliaInfo(fam || null);
@@ -298,7 +303,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
               tela={tela} setTela={setTela}
               membro={membro} membros={membros} contas={contas} cartoes={cartoes} categorias={categorias} podeEditar={podeEditar}
               frentesGasto={frentesGasto} fontesReceita={fontesReceita} nomePorMembroId={nomePorMembroId}
-              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} planejamentoValoresMes={planejamentoValoresMes} lancamentosCartao={lancamentosCartao} onLancarAgora={lancarAgoraDoPlanejamento} onPerguntarCosmo={perguntarCosmoSobrePlanejamento} chatPlanejamento={chatPlanejamento} onChatPlanejamentoConsumido={() => setChatPlanejamento(null)}
+              lancamentos={lancamentos} planejamentoItens={planejamentoItens} planejamentoPagamentos={planejamentoPagamentos} planejamentoValoresMes={planejamentoValoresMes} planejamentoVencimentosMes={planejamentoVencimentosMes} lancamentosCartao={lancamentosCartao} onLancarAgora={lancarAgoraDoPlanejamento} onPerguntarCosmo={perguntarCosmoSobrePlanejamento} chatPlanejamento={chatPlanejamento} onChatPlanejamentoConsumido={() => setChatPlanejamento(null)}
               familiaInfo={familiaInfo}
               onMembroAtualizado={() => { carregarTudo({ silencioso: true }); onMembroAtualizado && onMembroAtualizado(); }}
               onSalvo={() => carregarTudo({ silencioso: true })}
@@ -312,7 +317,7 @@ export default function OwnerView({ membro, onMembroAtualizado }) {
   );
 }
 
-function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, planejamentoValoresMes, lancamentosCartao, onLancarAgora, onPerguntarCosmo, chatPlanejamento, onChatPlanejamentoConsumido, familiaInfo, onMembroAtualizado, onSalvo }) {
+function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias, podeEditar, frentesGasto, fontesReceita, nomePorMembroId, lancamentos, planejamentoItens, planejamentoPagamentos, planejamentoValoresMes, planejamentoVencimentosMes, lancamentosCartao, onLancarAgora, onPerguntarCosmo, chatPlanejamento, onChatPlanejamentoConsumido, familiaInfo, onMembroAtualizado, onSalvo }) {
   if (tela?.startsWith("cartao:")) {
     const [, cartaoId, voltarPara] = tela.split(":"); // "cartao:<id>" ou "cartao:<id>:planejamento"
     return (
@@ -331,7 +336,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
     return (
       <ChatCosmo
         membro={membro} contas={contas} cartoes={cartoes} frentesGasto={frentesGasto} fontesReceita={fontesReceita}
-        planejamento={{ itens: planejamentoItens, pagamentos: planejamentoPagamentos, valoresMes: planejamentoValoresMes, cartoes, lancamentosCartao }}
+        planejamento={{ itens: planejamentoItens, pagamentos: planejamentoPagamentos, valoresMes: planejamentoValoresMes, vencimentosMes: planejamentoVencimentosMes, cartoes, lancamentosCartao }}
         mesFoco={chatPlanejamento?.mes} mensagemInicial={chatPlanejamento?.mensagem} onMensagemInicialConsumida={onChatPlanejamentoConsumido}
         onVoltar={() => setTela(null)} onSalvo={onSalvo}
       />
@@ -371,7 +376,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
   if (tela === "planejamento") {
     return (
       <Planejamento
-        familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} valoresMes={planejamentoValoresMes} frentesGasto={frentesGasto}
+        familiaId={membro.familia_id} itens={planejamentoItens} pagamentos={planejamentoPagamentos} valoresMes={planejamentoValoresMes} vencimentosMes={planejamentoVencimentosMes} frentesGasto={frentesGasto}
         cartoes={cartoes} lancamentosCartao={lancamentosCartao} onAbrirCartao={(id) => setTela(`cartao:${id}:planejamento`)}
         onAtualizado={onSalvo} onLancarAgora={onLancarAgora} onPerguntarCosmo={onPerguntarCosmo} onVoltar={() => setTela(null)}
       />

@@ -157,12 +157,12 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
       const mesDe = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
       const meses = [...new Set([mesFoco, mesDe(agora), mesDe(new Date(agora.getFullYear(), agora.getMonth() + 1, 1))].filter(Boolean))];
       const planejamentoResumo = planejamento
-        ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, meses })
+        ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, vencimentosMes: planejamento.vencimentosMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, meses })
         : undefined;
       // Projeção dos próximos 12 meses (boletos + faturas dos cartões) — só é usada se o
       // COSMO chamar comparar_meses ("como fica o mês que vem?").
       const projecaoMeses = planejamento
-        ? projecaoMensal({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, mesInicial: mesDe(agora), quantidade: 12 })
+        ? projecaoMensal({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, vencimentosMes: planejamento.vencimentosMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, mesInicial: mesDe(agora), quantidade: 12 })
         : undefined;
       const resp = await fetch("/api/chat", {
         method: "POST",

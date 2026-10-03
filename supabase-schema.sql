@@ -628,6 +628,28 @@ create policy "planejamento valores mes: familia ve e mexe" on planejamento_valo
 
 grant select, insert, update, delete on planejamento_valores_mes to authenticated;
 
+-- planejamento_vencimentos_mes (migração 17, 02/10/2026) — vencimento de VERDADE
+-- de um item num mês, quando cai em outro mês (ex: a conta de outubro que
+-- venceu em 28/09). Aparece como vencido e vira prioridade de pagamento.
+create table if not exists planejamento_vencimentos_mes (
+  id uuid primary key default gen_random_uuid(),
+  familia_id uuid not null references familias(id) on delete cascade,
+  item_id uuid not null references planejamento_itens(id) on delete cascade,
+  mes date not null,
+  vencimento date not null,
+  created_at timestamptz not null default now(),
+  unique (item_id, mes)
+);
+
+alter table planejamento_vencimentos_mes enable row level security;
+
+drop policy if exists "planejamento vencimentos mes: familia ve e mexe" on planejamento_vencimentos_mes;
+create policy "planejamento vencimentos mes: familia ve e mexe" on planejamento_vencimentos_mes
+  for all using (familia_id = minha_familia_id())
+  with check (familia_id = minha_familia_id());
+
+grant select, insert, update, delete on planejamento_vencimentos_mes to authenticated;
+
 -- saldos_contas() — ampliado na migração 9 (unificação do acesso da
 -- Alessia, 16/09/2026): antes só respondia pro dono, o que fazia sentido
 -- enquanto só ele via "Contas e cartões"/"Relatórios". Agora que essas
