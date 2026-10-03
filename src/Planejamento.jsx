@@ -39,7 +39,7 @@ import { itensDoMesComFaturas } from "./planejamentoCalculo.js";
 // Mudar o valor de outubro não mexe em novembro. Tocar no valor da linha abre
 // o ajuste rápido (valor do mês, ou o valor pago se o item já está pago).
 
-const MODO = { PAGAR: "pagar", VALOR_MES: "valorMes", AJUSTAR_PAGO: "ajustarPago" };
+const MODO = { PAGAR: "pagar", VALOR_MES: "valorMes", AJUSTAR_PAGO: "ajustarPago", DATA: "data" };
 
 function lerValor(str) {
   if (str === "" || str == null) return null;
@@ -161,6 +161,7 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     if (modo === MODO.PAGAR) inicial = item.previsto != null ? item.previsto : "";
     else if (modo === MODO.VALOR_MES) inicial = item.previsto != null ? item.previsto : "";
     else if (modo === MODO.AJUSTAR_PAGO) inicial = item.valorReal;
+    else if (modo === MODO.DATA) inicial = item.dia_vencimento ?? "";
     setPainel({ id: item.id, modo });
     setValorInformado(String(inicial));
   }
@@ -231,7 +232,32 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
     }
   }
 
+  // Coloca (ou muda/tira) o dia de vencimento do item, direto da linha — pedido do
+  // Matheus (02/10/2026): "tem coisas que podem já ter vencido, é bom poder colocar
+  // as datas". Vale pro item (todo mês); com data, ele passa a poder aparecer como
+  // atrasado / vence hoje / próximos 7 dias.
+  async function gravarData(item, dia) {
+    setSalvandoId(item.id);
+    try {
+      const { data, error } = await supabase.from("planejamento_itens").update({ dia_vencimento: dia }).eq("id", item.id).select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(`"${item.nome}" não foi atualizado — o banco não confirmou nenhuma alteração.`);
+      fecharPainel();
+      onAtualizado();
+    } catch (e) {
+      alert(e.message || "Erro ao salvar a data.");
+    } finally {
+      setSalvandoId(null);
+    }
+  }
+
   async function confirmarPainel(item) {
+    if (painel?.modo === MODO.DATA) {
+      const t = String(valorInformado).trim();
+      const dia = Number(t);
+      if (!t || !Number.isInteger(dia) || dia < 1 || dia > 31) return alert("Informe o dia do vencimento (de 1 a 31).");
+      return gravarData(item, dia);
+    }
     const valor = lerValor(valorInformado);
     if (valor == null) {
       return alert(painel?.modo === MODO.VALOR_MES ? `Informe o valor de ${nomeDoMes}.` : "Informe o valor pago neste mês.");
@@ -341,6 +367,12 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{item.nome}</div>
           {subtituloDe(item) && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{subtituloDe(item)}</div>}
+          <button
+            type="button" onClick={() => abrirPainel(item, MODO.DATA)}
+            style={{ border: "none", background: "transparent", padding: 0, marginTop: 2, cursor: "pointer", fontSize: 11, fontWeight: 700, color: C.accent, textDecoration: "underline dotted", textUnderlineOffset: 3 }}
+          >
+            {item.dia_vencimento ? "mudar a data" : "＋ colocar data de vencimento"}
+          </button>
         </div>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
           {/* Tocar no valor abre o ajuste rápido (ver `acaoValor`). Item
@@ -398,25 +430,33 @@ export default function Planejamento({ familiaId, itens, pagamentos, valoresMes,
       {painelAberto && (
         <div style={{ padding: "0 0 12px 48px" }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, marginBottom: 6 }}>
-            {painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
+            {painelAberto === MODO.DATA ? (item.recorrente ? "Dia do vencimento (todo mês)" : "Dia do vencimento") : painelAberto === MODO.VALOR_MES ? `Valor de ${nomeDoMes} (só neste mês)` : `Valor pago em ${nomeDoMes}`}
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
             <input
-              style={{ ...campoInput, width: 104 }} type="number" step="0.01" min="0" inputMode="decimal"
-              placeholder="0,00" value={valorInformado} autoFocus
+              style={{ ...campoInput, width: 104 }} type="number" step={painelAberto === MODO.DATA ? "1" : "0.01"} min={painelAberto === MODO.DATA ? "1" : "0"} max={painelAberto === MODO.DATA ? "31" : undefined} inputMode={painelAberto === MODO.DATA ? "numeric" : "decimal"}
+              placeholder={painelAberto === MODO.DATA ? "dia" : "0,00"} value={valorInformado} autoFocus
               onChange={(e) => setValorInformado(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); confirmarPainel(item); } }}
             />
             <button
               onClick={() => confirmarPainel(item)} disabled={salvandoEste}
-              style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+              style={{ padding: "8px 13px", borderRadius: 10, border: "none", background: painelAberto === MODO.VALOR_MES || painelAberto === MODO.DATA ? C.purple : C.green, color: "#fff", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
             >
-              {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : "Salvar valor pago"}
+              {salvandoEste ? "Salvando…" : painelAberto === MODO.PAGAR ? "Confirmar pago" : painelAberto === MODO.VALOR_MES ? "Salvar valor" : painelAberto === MODO.DATA ? "Salvar data" : "Salvar valor pago"}
             </button>
             <button onClick={fecharPainel} style={{ padding: "8px 11px", borderRadius: 10, border: `1px solid ${C.line}`, background: "transparent", color: C.inkMute, fontSize: 12.5, cursor: "pointer" }}>
               Cancelar
             </button>
           </div>
+          {painelAberto === MODO.DATA && item.dia_vencimento != null && (
+            <button
+              onClick={() => gravarData(item, null)} disabled={salvandoEste}
+              style={{ marginTop: 8, border: "none", background: "transparent", color: C.accent, fontSize: 11.5, fontWeight: 700, cursor: "pointer", padding: 0, textDecoration: "underline" }}
+            >
+              Tirar a data (vira "sem data")
+            </button>
+          )}
           {painelAberto === MODO.VALOR_MES && item.valorMes != null && (
             <button
               onClick={() => removerValorMes(item)} disabled={salvandoEste}

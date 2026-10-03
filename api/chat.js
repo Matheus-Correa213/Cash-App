@@ -139,6 +139,11 @@ function montarFerramentas(categoriasResumo) {
     input_schema: { type: "object", properties: {} },
   },
   {
+    name: "comparar_meses",
+    description: "Devolve, mês a mês (do mês atual até uns 12 meses à frente), quanto está previsto em boletos/contas do planejamento e quanto já há de fatura em cada cartão, com o total do mês, a DIFERENÇA em relação ao mês anterior e o que explica a mudança (o que entrou, o que saiu, o que mudou de valor), além da lista de boletos que se repetem todo mês. Use pra perguntas como 'como fica o mês que vem?', 'vou gastar mais ou menos em dezembro?', 'quando alivia?', 'qual a diferença entre este mês e os outros'. Só consulta — não grava nada.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
     name: "situacao_financeira_agora",
     description: "Devolve o saldo REAL de cada conta/carteira agora e, de cada cartão de crédito, a fatura do ciclo atual, o total das faturas dos próximos meses (parcelas e compras já lançadas) e o dia de vencimento. Use junto com planejamento_do_mes pra montar estratégia de pagamento (o que o dinheiro disponível cobre e até quando). Só consulta — não grava nada.",
     input_schema: { type: "object", properties: {} },
@@ -181,6 +186,7 @@ Regras importantes:
 - Cartão de crédito não é uma conta de subtração simples: uma compra parcelada (ex: "comprei um item de 6000 em 10x") consome o LIMITE inteiro na hora da compra, mas só uma parcela entra na fatura de cada mês. Isso ainda não pode ser lançado pelo chat — só pela tela "Novo lançamento" no app, que já sabe dividir e espalhar as parcelas certas pelos meses. Se o usuário descrever uma compra parcelada, não use propor_lancamento nem fatura_atual pra isso — explique que esse tipo de lançamento precisa ser feito em "Novo lançamento" no app.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
 - Se o usuário quiser reorganizar/revisar lançamentos que já foram feitos — por exemplo, separar compras de "mercado" e "combustível" que hoje estão misturadas dentro de "Dia a dia" — chame listar_lancamentos filtrando pela categoria genérica (não peça isso de cara em toda pergunta, só quando for realmente necessário ver a descrição individual de cada lançamento). Depois de ver a lista, decida a categoria nova de cada um pela descrição e chame propor_editar_lancamento uma vez pra CADA lançamento que deve mudar, em paralelo (mesma lógica de propor_conta_ou_cartao) — nunca invente ou edite um lançamento que você não viu na lista.
+- Se o usuário perguntar como ficam os OUTROS MESES, se vai gastar mais ou menos, a diferença entre meses, quando alivia ou o que muda daqui pra frente: chame comparar_meses e responda só com os números dela. Diga o total de cada mês relevante (ou do mês perguntado), a diferença pro mês anterior e, principalmente, POR QUE mudou (qual parcela/fatura acabou, qual boleto entrou ou saiu, o que mudou de valor) usando entrou_neste_mes, saiu_neste_mes e mudou_de_valor. Lembre que as faturas dos meses de frente só incluem o que já está lançado no cartão, então podem subir com novas compras, e que boletos aproximados ou sem valor definido deixam o total incerto — diga quais. Se a pessoa quiser os boletos recorrentes, use boletos_recorrentes e planejamento_do_mes. Texto simples, sem markdown, curto: no máximo uns 6 meses em lista (mês · total · diferença) e depois a explicação.
 - Se o usuário pedir ESTRATÉGIA DE PAGAMENTO (em que ordem pagar, o que priorizar, se o saldo cobre, o que fazer se não cobrir): chame planejamento_do_mes E situacao_financeira_agora, as duas na mesma rodada, e raciocine só com os números que elas devolverem. Considere apenas itens NÃO pagos. Ordene por dia de vencimento; no mês atual, o que tem dia anterior a hoje já está ATRASADO e vem primeiro. Itens SEM dia_vencimento são coisas pessoais, sem data de verdade: trate como flexíveis — vão por último, só se sobrar saldo, e nunca como atrasados. Compare a soma acumulada do que vence com o saldo das contas e diga em que data o saldo deixa de cobrir e quanto falta. Valores marcados como aproximados são estimativa — avise. As faturas dos cartões já aparecem no planejamento como itens com origem "fatura_cartao" (valor atual, vencimento e, se ainda_recebendo_compras for true, o valor ainda pode subir até o fechamento — avise isso): use esses itens e NÃO some de novo as faturas que vêm de situacao_financeira_agora (use aquela ferramenta pro saldo das contas e pra ver faturas de outros meses). Se algum outro item do planejamento parecer ser a mesma fatura/parcela de um cartão, diga a dúvida em vez de somar duas vezes. Você não sabe quando entra dinheiro novo (salário etc.): não invente, e se faltar saldo pergunte se há entrada prevista antes da data crítica. Formato: ordem sugerida em lista curta (data · item · valor), depois o ponto de atenção, e no máximo uma pergunta. Escreva em texto simples (o chat não formata markdown: nada de ** ou #; use traços e quebras de linha). Você não paga nem marca nada — só orienta.
 - Seja direto, caloroso e breve — poucas frases, sem enrolação.
 - Nunca dê conselho financeiro genérico não pedido; foque em ajudar com o que foi perguntado.`;
@@ -199,7 +205,7 @@ export default async function handler(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return res.status(401).json({ error: "Não autenticado." });
 
-  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, hoje: hojeCliente } = req.body || {};
+  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: hojeCliente } = req.body || {};
   // "Hoje" vem do navegador (fuso de quem usa); sem isso, a data do servidor.
   const hoje = /^\d{4}-\d{2}-\d{2}$/.test(hojeCliente || "") ? hojeCliente : new Date().toISOString().slice(0, 10);
   if (!mensagem && !imagemBase64) return res.status(400).json({ error: "Envie uma mensagem ou uma imagem." });
@@ -246,6 +252,14 @@ export default async function handler(req, res) {
         hoje,
         meses: planejamentoResumo,
         legenda: "dia_vencimento null = sem data (coisa pessoal, sem vencimento fixo). valor_previsto null = ainda sem valor definido. valor_aproximado true = estimativa, não o valor real do boleto. pago true = já quitado.",
+      };
+    }
+    if (nome === "comparar_meses") {
+      if (!projecaoMeses || !Array.isArray(projecaoMeses.meses) || projecaoMeses.meses.length === 0) return { erro: "O app não enviou a projeção dos meses nesta mensagem." };
+      return {
+        hoje,
+        ...projecaoMeses,
+        legenda: "total_boletos = o que o planejamento prevê em boletos/contas (itens sem valor definido contam 0 e vêm listados em boletos_sem_valor_definido; aproximados são estimativa). total_faturas_cartao = só o que JÁ está lançado nos cartões (parcelas e compras, inclusive importadas por OFX): compras novas que ainda vão acontecer não existem aqui, então as faturas dos meses de frente tendem a subir quando a pessoa for usando o cartão. diferenca_* = mês menos o mês anterior (negativo = alivia). Faturas de cartão são calculadas das compras; não estão duplicadas nos boletos.",
       };
     }
     if (nome === "situacao_financeira_agora") {

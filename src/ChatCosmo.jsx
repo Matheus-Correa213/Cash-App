@@ -3,7 +3,7 @@ import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 import { PALETA_CORES, normalizarChave } from "./CategoriaCampos.jsx";
-import { resumoPlanejamentoParaCosmo } from "./planejamentoCalculo.js";
+import { resumoPlanejamentoParaCosmo, projecaoMensal } from "./planejamentoCalculo.js";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
@@ -18,7 +18,7 @@ import { resumoPlanejamentoParaCosmo } from "./planejamentoCalculo.js";
 // `dbId` (o id da linha no banco) que a gente usa depois pra atualizar
 // `confirmadas` quando a pessoa confirma uma proposta.
 
-const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?", "Estratégia de pagamento"];
+const SUGESTOES = ["Adicionar gasto", "Anexar comprovante", "Como estão minhas finanças?", "Estratégia de pagamento", "Como ficam os próximos meses?"];
 
 // Pedido do Matheus (02/10/2026): "uma opção de acesso ao COSMO, principalmente
 // pra ter uma ideia de estratégia de pagamento, com base em datas de
@@ -159,10 +159,15 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
       const planejamentoResumo = planejamento
         ? resumoPlanejamentoParaCosmo({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, meses })
         : undefined;
+      // Projeção dos próximos 12 meses (boletos + faturas dos cartões) — só é usada se o
+      // COSMO chamar comparar_meses ("como fica o mês que vem?").
+      const projecaoMeses = planejamento
+        ? projecaoMensal({ itens: planejamento.itens, pagamentos: planejamento.pagamentos, valoresMes: planejamento.valoresMes, cartoes: planejamento.cartoes, lancamentosCartao: planejamento.lancamentosCartao, frentesGasto, mesInicial: mesDe(agora), quantidade: 12 })
+        : undefined;
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, hoje: dataLocalISO() }),
+        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: dataLocalISO() }),
       });
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao falar com o COSMO.");
@@ -615,7 +620,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
 
       <div style={{ display: "flex", gap: 8, padding: "10px 18px", overflowX: "auto" }}>
         {SUGESTOES.map((s) => (
-          <button key={s} onClick={() => s === "Anexar comprovante" ? inputArquivo.current?.click() : s === "Estratégia de pagamento" ? enviar(textoEstrategiaPagamento(mesFoco)) : enviar(s)} style={{ whiteSpace: "nowrap", padding: "7px 12px", borderRadius: 100, border: `1px solid ${C.lineStrong}`, background: "#fff", color: C.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
+          <button key={s} onClick={() => s === "Anexar comprovante" ? inputArquivo.current?.click() : s === "Estratégia de pagamento" ? enviar(textoEstrategiaPagamento(mesFoco)) : s === "Como ficam os próximos meses?" ? enviar("Compare os próximos meses: quanto vou ter de boletos e de fatura de cartão em cada um, qual a diferença de um mês pro outro e por que muda.") : enviar(s)} style={{ whiteSpace: "nowrap", padding: "7px 12px", borderRadius: 100, border: `1px solid ${C.lineStrong}`, background: "#fff", color: C.ink, fontSize: 11.5, fontWeight: 700, cursor: "pointer" }}>
             {s}
           </button>
         ))}

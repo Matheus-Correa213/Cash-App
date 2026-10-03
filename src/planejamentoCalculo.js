@@ -129,3 +129,59 @@ export function itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, l
     ...faturasDeCartaoDoMes({ cartoes, lancamentosCartao, mes, hoje }),
   ]);
 }
+
+// PROJEÇÃO MÊS A MÊS pro COSMO responder "e nos outros meses, como fica?" —
+// pedido do Matheus (02/10/2026): o COSMO ler os boletos recorrentes e as
+// faturas dos cartões que já existem e falar da DIFERENÇA de gastos entre os meses.
+//
+// Por mês: o que está previsto em boletos/contas do planejamento + o que as
+// faturas dos cartões já têm lançado (parcelas e compras já no app, inclusive as
+// vindas de OFX) e a diferença pro mês anterior, com o que explica a mudança
+// (o que entrou, o que saiu, o que mudou de valor). Compras de cartão ainda não
+// feitas NÃO existem aqui — as faturas dos meses de frente só têm parcelas e
+// compras já lançadas, então tendem a ser menores do que serão de verdade.
+export function projecaoMensal({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, frentesGasto, mesInicial, quantidade = 12, hoje }) {
+  const somar = (ym, n) => { const [a, m] = ym.split("-").map(Number); return new Date(Date.UTC(a, m - 1 + n, 1)).toISOString().slice(0, 7); };
+  const arred = (n) => Math.round(n * 100) / 100;
+  const rotulo = (c) => (frentesGasto || []).find((f) => f.chave === c)?.label || c;
+  const meses = [];
+  let anterior = null;
+  for (let k = 0; k < quantidade; k++) {
+    const mes = somar(mesInicial, k);
+    const todos = itensDoMesComFaturas({ itens, pagamentos, valoresMes, cartoes, lancamentosCartao, mes, hoje });
+    const boletos = todos.filter((i) => !i.ehCartao);
+    const faturas = todos.filter((i) => i.ehCartao);
+    const totalBoletos = boletos.reduce((s, i) => s + (i.previstoSoma || 0), 0);
+    const totalCartoes = faturas.reduce((s, i) => s + (i.previstoSoma || 0), 0);
+    const total = totalBoletos + totalCartoes;
+    // Mapa por "nome" pra comparar com o mês anterior.
+    const mapa = new Map([...boletos, ...faturas].map((i) => [i.nome, i]));
+    const registro = {
+      mes,
+      total_boletos: arred(totalBoletos),
+      total_faturas_cartao: arred(totalCartoes),
+      total_geral: arred(total),
+      faturas_por_cartao: faturas.map((i) => ({ cartao: i.nome.replace(/^Fatura /, ""), valor: arred(i.previsto), vence_dia: i.dia_vencimento ?? null })),
+      boletos_sem_valor_definido: boletos.filter((i) => i.previstoSoma === 0 && i.previsto == null).map((i) => i.nome),
+      boletos_com_valor_aproximado: boletos.filter((i) => i.aproximado).length,
+    };
+    if (anterior) {
+      const dif = total - anterior.total;
+      registro.diferenca_vs_mes_anterior = arred(dif);
+      registro.diferenca_boletos = arred(totalBoletos - anterior.totalBoletos);
+      registro.diferenca_faturas_cartao = arred(totalCartoes - anterior.totalCartoes);
+      registro.entrou_neste_mes = [...mapa.values()].filter((i) => !anterior.mapa.has(i.nome) && (i.previstoSoma || 0) > 0).map((i) => ({ item: i.nome, valor: arred(i.previstoSoma), tipo: i.ehCartao ? "fatura do cartão" : i.recorrente ? "todo mês" : "só neste mês" }));
+      registro.saiu_neste_mes = [...anterior.mapa.values()].filter((i) => !mapa.has(i.nome) && (i.previstoSoma || 0) > 0).map((i) => ({ item: i.nome, valor: arred(i.previstoSoma), tipo: i.ehCartao ? "fatura do cartão" : i.recorrente ? "todo mês" : "só no mês anterior" }));
+      registro.mudou_de_valor = [...mapa.values()].filter((i) => anterior.mapa.has(i.nome) && Math.abs((i.previstoSoma || 0) - (anterior.mapa.get(i.nome).previstoSoma || 0)) > 0.005)
+        .map((i) => ({ item: i.nome, de: arred(anterior.mapa.get(i.nome).previstoSoma || 0), para: arred(i.previstoSoma || 0) }));
+    }
+    meses.push(registro);
+    anterior = { total, totalBoletos, totalCartoes, mapa };
+  }
+  // Os boletos/contas que se repetem todo mês (a "base fixa" do planejamento).
+  const recorrentes = (itens || []).filter((i) => i.recorrente).map((i) => ({
+    nome: i.nome, categoria: rotulo(i.categoria), dia_vencimento: i.dia_vencimento ?? null,
+    valor_padrao: i.valor_fixo != null ? Number(i.valor_fixo) : null, valor_varia_por_mes: i.tipo_valor === "variavel",
+  }));
+  return { meses, boletos_recorrentes: recorrentes };
+}
