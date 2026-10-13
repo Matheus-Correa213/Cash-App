@@ -25,6 +25,20 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { calcularResumo, inicioDoMes } from "./_lib/resumo-calculo.js";
+import { montarPlanejamento, mesesPedidos } from "./_lib/planejamento-resumo.js";
+
+// Lê a tabela inteira em páginas de 1000 (o Supabase corta em 1000 linhas por consulta).
+async function lerTudo(consulta) {
+  const tudo = [];
+  for (let de = 0; ; de += 1000) {
+    const { data, error } = await consulta().range(de, de + 999);
+    if (error) return { data: null, error };
+    tudo.push(...data);
+    if (data.length < 1000) return { data: tudo, error: null };
+  }
+}
+// Tabela criada por migração posterior: se ainda não existe, segue sem ela.
+const opcional = async (consulta) => { const r = await lerTudo(consulta); return r.error ? [] : r.data; };
 
 export default async function handler(req, res) {
   if (req.method !== "GET") {
@@ -50,7 +64,7 @@ export default async function handler(req, res) {
     // Busca todos os lançamentos (o saldo real precisa de todos), as contas, os membros e as categorias
     // (para devolver o NOME da categoria e não a chave interna). A conta fica em api/_lib/resumo-calculo.js.
     const [{ data: lancamentos, error: errLanc }, { data: membros, error: errMemb }, { data: contas, error: errContas }, { data: categorias, error: errCat }] = await Promise.all([
-      supabase.from("lancamentos").select("tipo, categoria, valor, membro_id, data, conta_id, cartao_id"),
+      lerTudo(() => supabase.from("lancamentos").select("tipo, categoria, valor, membro_id, data, conta_id, cartao_id").order("id")),
       supabase.from("membros").select("id, nome, papel, mesada_mensal"),
       supabase.from("contas").select("id, tipo, saldo_inicial"),
       supabase.from("categorias").select("tipo, chave, label"),
@@ -59,6 +73,20 @@ export default async function handler(req, res) {
     if (errMemb) throw errMemb;
     if (errContas) throw errContas;
     if (errCat) throw errCat;
+
+    // ?parte=planejamento[&meses=2026-10,2026-11][&projecao=1]: o Planejamento do app, mês a mês (mesmos números da tela).
+    if (req.query && req.query.parte === "planejamento") {
+      const [itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao] = await Promise.all([
+        opcional(() => supabase.from("planejamento_itens").select("*").order("created_at")),
+        opcional(() => supabase.from("planejamento_pagamentos").select("*").order("item_id")),
+        opcional(() => supabase.from("planejamento_valores_mes").select("*").order("item_id")),
+        opcional(() => supabase.from("planejamento_vencimentos_mes").select("*").order("item_id")),
+        opcional(() => supabase.from("cartoes_credito").select("*").order("nome")),
+        opcional(() => supabase.from("lancamentos").select("id, cartao_id, valor, data, fatura_paga").eq("tipo", "gasto").not("cartao_id", "is", null).order("id")),
+      ]);
+      const meses = mesesPedidos(req.query.meses, inicioMesISO.slice(0, 7));
+      return res.status(200).json({ ...montarPlanejamento({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, categorias, meses, comProjecao: req.query.projecao === "1" }) });
+    }
 
     return res.status(200).json(calcularResumo({ lancamentos, membros, contas, categorias, inicioMesISO }));
   } catch (e) {

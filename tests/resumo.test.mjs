@@ -50,4 +50,43 @@ t("gastos por pessoa só contam dinheiro de conta e arredondam", () => {
   const r = calcularResumo({ ...base, lancamentos: [L({ valor: 10.01 }), L({ valor: 0.1 }), L({ valor: 0.2 }), L({ valor: 99, cartao_id: "k" })] });
   assert.equal(r.gastos_por_membro.Matheus, 10.31);
 });
+
+import { montarPlanejamento, mesesPedidos } from "../api/_lib/planejamento-resumo.js";
+const HOJE = new Date("2026-10-13T12:00:00");
+const item = (o) => ({ id: "i1", nome: "Aluguel", categoria: "moradia", tipo_valor: "fixo", valor_fixo: 1500, dia_vencimento: 5, recorrente: true, mes_especifico: null, ...o });
+const PLAN = {
+  itens: [item({}), item({ id: "i2", nome: "Luz", tipo_valor: "variavel", valor_fixo: 200, dia_vencimento: 12 }), item({ id: "i3", nome: "Sem valor", valor_fixo: null, dia_vencimento: null }), item({ id: "i4", nome: "Só novembro", recorrente: false, mes_especifico: "2026-11-01", valor_fixo: 100 })],
+  pagamentos: [{ item_id: "i1", mes: "2026-10-01", valor_pago: 1500 }],
+  valoresMes: [{ item_id: "i2", mes: "2026-10-01", valor: 260 }],
+  vencimentosMes: [],
+  cartoes: [{ id: "k1", nome: "Nubank", dia_fechamento: 20, dia_vencimento: 27, fatura_inicial: 0 }],
+  lancamentosCartao: [{ id: "a", cartao_id: "k1", valor: 300, data: "2026-10-10", fatura_paga: false }, { id: "b", cartao_id: "k1", valor: 50, data: "2026-10-12", fatura_paga: false }],
+  categorias: [{ tipo: "gasto", chave: "moradia", label: "Moradia" }],
+  hoje: HOJE,
+};
+t("planejamento: totais iguais aos do topo da tela (previsto, pago, falta) e itens com nome de categoria", () => {
+  const r = montarPlanejamento({ ...PLAN, meses: ["2026-10"] });
+  const m = r.meses[0];
+  assert.equal(m.total_previsto, 1500 + 260 + 350); // aluguel + luz do mês (260) + fatura do cartão (350); "Sem valor" fora
+  assert.equal(m.total_pago, 1500);
+  assert.equal(m.total_falta, 260 + 350);
+  assert.equal(m.itens_sem_valor_em_aberto, 1);
+  const aluguel = m.itens.find((i) => i.nome === "Aluguel");
+  assert.equal(aluguel.categoria, "Moradia"); assert.equal(aluguel.pago, true);
+  assert.ok(m.itens.some((i) => i.recorrencia === "fatura do cartão" && i.valor_previsto === 350));
+  assert.equal(r.projecao, undefined);
+});
+t("planejamento: item só de novembro não aparece em outubro; projeção opcional compara os meses", () => {
+  const r = montarPlanejamento({ ...PLAN, meses: ["2026-10", "2026-11"], comProjecao: true });
+  assert.ok(!r.meses[0].itens.some((i) => i.nome === "Só novembro"));
+  assert.ok(r.meses[1].itens.some((i) => i.nome === "Só novembro"));
+  assert.equal(r.projecao.meses.length, 12);
+  assert.equal(r.projecao.meses[0].mes, "2026-10");
+  assert.ok(r.projecao.meses[1].entrou_neste_mes.some((x) => x.item === "Só novembro"));
+});
+t("meses pedidos: só YYYY-MM válidos, sem repetir; vazio = atual e próximo", () => {
+  assert.deepEqual(mesesPedidos("2026-10, 2026-10,xx,2026-13,2026-12", "2026-10"), ["2026-10", "2026-12"]);
+  assert.deepEqual(mesesPedidos("", "2026-12"), ["2026-12", "2027-01"]);
+  assert.equal(mesesPedidos(Array.from({ length: 20 }, (_, i) => `2026-${String((i % 12) + 1).padStart(2, "0")}`).join(","), "2026-01").length, 12);
+});
 console.log(ok + " testes passaram");
