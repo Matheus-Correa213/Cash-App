@@ -26,6 +26,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { calcularResumo, inicioDoMes } from "./_lib/resumo-calculo.js";
 import { montarPlanejamento, mesesPedidos } from "./_lib/planejamento-resumo.js";
+import { normalizarFiltros, montarLancamentos, montarCategorias, montarCartoes, montarContas, montarAssinaturas, montarInvestimentos, montarRecorrentes } from "./_lib/cash-leitura.js";
 
 // Lê a tabela inteira em páginas de 1000 (o Supabase corta em 1000 linhas por consulta).
 async function lerTudo(consulta) {
@@ -64,7 +65,7 @@ export default async function handler(req, res) {
     // Busca todos os lançamentos (o saldo real precisa de todos), as contas, os membros e as categorias
     // (para devolver o NOME da categoria e não a chave interna). A conta fica em api/_lib/resumo-calculo.js.
     const [{ data: lancamentos, error: errLanc }, { data: membros, error: errMemb }, { data: contas, error: errContas }, { data: categorias, error: errCat }] = await Promise.all([
-      lerTudo(() => supabase.from("lancamentos").select("tipo, categoria, valor, membro_id, data, conta_id, cartao_id").order("id")),
+      lerTudo(() => supabase.from("lancamentos").select(req.query && req.query.parte === "lancamentos" ? "*" : "tipo, categoria, valor, membro_id, data, conta_id, cartao_id").order("id")),
       supabase.from("membros").select("id, nome, papel, mesada_mensal"),
       supabase.from("contas").select("id, tipo, saldo_inicial"),
       supabase.from("categorias").select("tipo, chave, label"),
@@ -86,6 +87,47 @@ export default async function handler(req, res) {
       ]);
       const meses = mesesPedidos(req.query.meses, inicioMesISO.slice(0, 7));
       return res.status(200).json({ ...montarPlanejamento({ itens, pagamentos, valoresMes, vencimentosMes, cartoes, lancamentosCartao, categorias, meses, comProjecao: req.query.projecao === "1" }) });
+    }
+
+    // Leitura completa (somente leitura): ?parte=lancamentos|categorias|cartoes|contas|assinaturas|investimentos|recorrentes
+    // Filtros dos lançamentos: mes, de, ate, tipo, categoria, membro, conta, cartao, texto, limite.
+    const parte = req.query && req.query.parte;
+    if (parte === "lancamentos") {
+      const [cartoes] = await Promise.all([opcional(() => supabase.from("cartoes_credito").select("id, nome").order("nome"))]);
+      return res.status(200).json(montarLancamentos({ lancamentos, membros, contas, cartoes, categorias, filtros: normalizarFiltros(req.query) }));
+    }
+    if (parte === "categorias") {
+      const f = normalizarFiltros(req.query);
+      const inicio = f.de || inicioMesISO;
+      const fim = f.mes ? `${new Date(Date.UTC(+f.mes.slice(0, 4), +f.mes.slice(5, 7), 1)).toISOString().slice(0, 10)}` : null;
+      return res.status(200).json(montarCategorias({ lancamentos, categorias, inicioMesISO: inicio, fimExclusivoISO: fim }));
+    }
+    if (parte === "contas") return res.status(200).json(montarContas({ contas: (await opcional(() => supabase.from("contas").select("*").order("nome"))), lancamentos }));
+    if (parte === "cartoes") {
+      const [cartoes, contasTodas, lancCartao] = await Promise.all([
+        opcional(() => supabase.from("cartoes_credito").select("*").order("nome")),
+        opcional(() => supabase.from("contas").select("id, nome").order("nome")),
+        opcional(() => supabase.from("lancamentos").select("*").eq("tipo", "gasto").not("cartao_id", "is", null).order("id")),
+      ]);
+      const n = parseInt(req.query.faturas, 10);
+      return res.status(200).json(montarCartoes({ cartoes, contas: contasTodas, lancamentosCartao: lancCartao, quantidadeFaturas: Number.isFinite(n) ? n : 6 }));
+    }
+    if (parte === "assinaturas") {
+      const [assinaturas, cartoes, contasTodas] = await Promise.all([
+        opcional(() => supabase.from("assinaturas").select("*").order("nome")),
+        opcional(() => supabase.from("cartoes_credito").select("id, nome")),
+        opcional(() => supabase.from("contas").select("id, nome")),
+      ]);
+      return res.status(200).json(montarAssinaturas({ assinaturas, cartoes, contas: contasTodas, categorias }));
+    }
+    if (parte === "investimentos") return res.status(200).json(montarInvestimentos({ investimentos: await opcional(() => supabase.from("investimentos").select("*").order("nome")) }));
+    if (parte === "recorrentes") {
+      const [itens, assinaturas, cartoes] = await Promise.all([
+        opcional(() => supabase.from("planejamento_itens").select("*").order("created_at")),
+        opcional(() => supabase.from("assinaturas").select("*").order("nome")),
+        opcional(() => supabase.from("cartoes_credito").select("id, nome, dia_vencimento").order("nome")),
+      ]);
+      return res.status(200).json(montarRecorrentes({ itens, assinaturas, cartoes, categorias }));
     }
 
     return res.status(200).json(calcularResumo({ lancamentos, membros, contas, categorias, inicioMesISO }));

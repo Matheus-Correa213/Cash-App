@@ -14,6 +14,18 @@ export function inicioDoMes(agora = new Date()) {
 
 const arredonda = (n) => Number(Number(n).toFixed(2));
 
+/** Saldo de cada conta: saldo_inicial + receitas − gastos lançados nela (mesma lógica da RPC saldos_contas()). */
+export function saldosPorConta(lancamentos = [], contas = []) {
+  const saldo = Object.fromEntries(contas.map((c) => [c.id, Number(c.saldo_inicial) || 0]));
+  for (const l of lancamentos) {
+    if (!l.conta_id || !(l.conta_id in saldo)) continue;
+    const valor = Number(l.valor) || 0;
+    if (l.tipo === "receita") saldo[l.conta_id] += valor;
+    else if (l.tipo === "gasto") saldo[l.conta_id] -= valor;
+  }
+  return saldo;
+}
+
 export function calcularResumo({ lancamentos = [], membros = [], contas = [], categorias = [], inicioMesISO }) {
   const nomesPorId = Object.fromEntries(membros.map((m) => [m.id, m.nome]));
   const rotulo = {};
@@ -36,13 +48,7 @@ export function calcularResumo({ lancamentos = [], membros = [], contas = [], ca
   }
 
   // Saldo real: saldo_inicial de cada conta + todos os lançamentos dela (mesma lógica da RPC saldos_contas()), sem poupança.
-  const saldoPorConta = Object.fromEntries(contas.map((c) => [c.id, Number(c.saldo_inicial) || 0]));
-  for (const l of lancamentos) {
-    if (!l.conta_id || !(l.conta_id in saldoPorConta)) continue;
-    const valor = Number(l.valor) || 0;
-    if (l.tipo === "receita") saldoPorConta[l.conta_id] += valor;
-    else if (l.tipo === "gasto") saldoPorConta[l.conta_id] -= valor;
-  }
+  const saldoPorConta = saldosPorConta(lancamentos, contas);
   const saldo = contas.filter((c) => c.tipo !== "poupanca").reduce((s, c) => s + (saldoPorConta[c.id] ?? 0), 0);
 
   const arred = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, arredonda(v)]));
