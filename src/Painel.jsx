@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, inicioMesISO, mesDaFatura } from "./theme.js";
 import NovoLancamento from "./NovoLancamento.jsx";
-import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconBarChart, IconChevronRight, IconChevronUp, IconChevronDown, IconSettings, IconTrendingUp } from "./Icons.jsx";
+import { IconPlus, IconCosmo, IconCard, IconRefresh, IconUpload, IconTransfer, IconBarChart, IconChevronRight, IconChevronUp, IconChevronDown, IconSettings, IconTrendingUp } from "./Icons.jsx";
 import LogoInstituicao from "./LogoInstituicao.jsx";
 
 // Catálogo de tudo que PODE aparecer em "Seus widgets" — cada pessoa escolhe
@@ -31,6 +31,7 @@ const PADRAO_WIDGETS = [{ tipo: "cartao" }, { tipo: "assinaturas" }, { tipo: "in
 
 const shortcuts = [
   { chave: "contas", label: "Contas", cor: C.accent, corSoft: C.accentSoft, Icone: IconCard },
+  { chave: "transferir", label: "Transferir", cor: C.green, corSoft: C.greenSoft, Icone: IconTransfer },
   { chave: "assinaturas", label: "Assinaturas", cor: C.purple, corSoft: C.purpleSoft, Icone: IconRefresh },
   { chave: "importar", label: "Anexar", cor: C.accent, corSoft: C.accentSoft, Icone: IconUpload },
   { chave: "relatorios", label: "Relatórios", cor: C.accent, corSoft: C.accentSoft, Icone: IconBarChart },
@@ -219,7 +220,7 @@ export default function Painel({ membro, membros, lancamentos, contas, cartoes, 
         />
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8 }}>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 4 }}>
         {shortcuts.map((s) => (
           <button key={s.chave} onClick={() => onNavegar(s.chave)} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, border: "none", background: "transparent", cursor: "pointer" }}>
             <div style={{ width: 46, height: 46, borderRadius: 14, background: s.corSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>

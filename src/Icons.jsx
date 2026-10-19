@@ -23,6 +23,7 @@ export function IconArrowDown(p) { return <Svg {...p}><line x1="12" y1="5" x2="1
 export function IconGrid(p) { return <Svg {...p}><rect x="4" y="4" width="7" height="7" rx="1.5" /><rect x="13" y="4" width="7" height="7" rx="1.5" /><rect x="4" y="13" width="7" height="7" rx="1.5" /><rect x="13" y="13" width="7" height="7" rx="1.5" /></Svg>; }
 export function IconCard(p) { return <Svg {...p}><rect x="3" y="5" width="18" height="14" rx="2.5" /><line x1="3" y1="10" x2="21" y2="10" /></Svg>; }
 export function IconRefresh(p) { return <Svg {...p}><polyline points="17 2 21 6 17 10" /><path d="M3 12v-2a4 4 0 0 1 4-4h14" /><polyline points="7 22 3 18 7 14" /><path d="M21 12v2a4 4 0 0 1-4 4H3" /></Svg>; }
+export function IconTransfer(p) { return <Svg {...p}><polyline points="17 3 21 7 17 11" /><line x1="21" y1="7" x2="9" y2="7" /><polyline points="7 21 3 17 7 13" /><line x1="3" y1="17" x2="15" y2="17" /></Svg>; }
 export function IconUpload(p) { return <Svg {...p}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></Svg>; }
 export function IconBarChart(p) { return <Svg {...p}><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="6" /><line x1="18" y1="20" x2="18" y2="15" /></Svg>; }
 export function IconPlus(p) { return <Svg {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Svg>; }

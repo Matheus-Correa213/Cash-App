@@ -29,7 +29,7 @@ const TIPOS_CONTA = [
 // papel. O RLS (ver migração 10) já garante, do lado do banco, que quem tem
 // acesso restrito só edita/exclui o que ela já enxerga — o que ela não vê,
 // ela nem sabe que existe.
-export default function ContasCartoes({ familiaId, onAbrirCartao, onVoltar }) {
+export default function ContasCartoes({ familiaId, onAbrirCartao, onTransferir, onVoltar }) {
   const [contas, setContas] = useState([]);
   const [cartoes, setCartoes] = useState([]);
   const [saldos, setSaldos] = useState({});
@@ -153,6 +153,10 @@ export default function ContasCartoes({ familiaId, onAbrirCartao, onVoltar }) {
           </div>
         </div>
       </div>
+
+      {onTransferir && contas.length >= 2 && (
+        <button type="button" onClick={onTransferir} style={{ ...btnGhost, width: "100%", marginBottom: 16, fontWeight: 800 }}>⇄ Transferir entre contas</button>
+      )}
 
       <div style={cardStyle}>
         <div style={{ ...h2, display: "flex", alignItems: "center", gap: 8 }}><IconCard size={14} color={C.inkFaint} strokeWidth={2} /> Contas bancárias</div>

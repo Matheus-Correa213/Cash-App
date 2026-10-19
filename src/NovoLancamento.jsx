@@ -3,6 +3,8 @@ import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, somarMeses, SEM_CATEGORIA } from "./theme.js";
 import { IconCard, IconCash, IconCreditCard, IconClose, IconPlus } from "./Icons.jsx";
 import { PALETA_CORES, normalizarChave, SeletorCor, SeletorEmoji } from "./CategoriaCampos.jsx";
+import { ArquivosPendentes, BotaoAnexar } from "./Anexos.jsx";
+import { registrarAnexos, subirArquivos } from "./anexosUtil.js";
 
 // Lançamento simplificado por toques (chips), com um seletor real de
 // conta/cartão (cores por instituição) e, quando o pagamento é num cartão,
@@ -60,6 +62,9 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
   const [tag, setTag] = useState("");
   const [salvando, setSalvando] = useState(false);
   const [erro, setErro] = useState("");
+  // Anexos (migração 18, 19/10/2026): comprovantes escolhidos aqui sobem
+  // junto com o lançamento (PDF, fotos e outros, vários de uma vez).
+  const [arquivos, setArquivos] = useState([]);
 
   // Criar categoria direto daqui (leva 13, 26/09/2026, pedido do Matheus:
   // "poder criar uma categoria ao lançar um gasto ou receita, e ela já ficar
@@ -180,8 +185,24 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
         }).select().single();
         if (error) throw error;
         if (categoria === SEM_CATEGORIA && inserido) categorizarEmSegundoPlano(inserido);
+        // Os anexos sobem DEPOIS do lançamento já salvo: se o envio falhar, o
+        // lançamento continua valendo e a pessoa só recebe o aviso (e pode
+        // anexar de novo em "editar").
+        if (arquivos.length > 0 && inserido) {
+          try {
+            const metas = await subirArquivos(membroLogado.familia_id, arquivos);
+            try {
+              await registrarAnexos({ lancamentoId: inserido.id, metas });
+            } catch (e2) {
+              await supabase.storage.from("anexos").remove(metas.map((m) => m.caminho)).catch(() => {});
+              throw e2;
+            }
+          } catch (e3) {
+            alert(`O lançamento foi salvo, mas não consegui enviar os anexos: ${e3.message}\n\nVocê pode anexar de novo em Gastos/Receitas → editar.`);
+          }
+        }
       }
-      setValor(""); setDescricao(""); setTag(""); setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual("");
+      setValor(""); setDescricao(""); setTag(""); setPagoCom(""); setParcelas(1); setParcelaComJuros(false); setValorParcelaManual(""); setArquivos([]);
       onSalvo && onSalvo();
       onFechar && onFechar();
     } catch (e) {
@@ -423,8 +444,20 @@ export default function NovoLancamento({ membroLogado, membros, contas, cartoes,
         <input style={campoInput} placeholder="Tag (ex: Casamento)" value={tag} onChange={(e) => setTag(e.target.value)} />
       </div>
 
+      {/* Anexos: só pra lançamento de uma linha só. Compra parcelada vira várias
+          linhas (uma por mês) — nesse caso o comprovante é anexado depois, em
+          "editar" na parcela que fizer sentido. */}
+      {!(mostrarParcelamento && parcelas > 1) && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <ArquivosPendentes arquivos={arquivos} onRemover={(i) => setArquivos((a) => a.filter((_, idx) => idx !== i))} />
+          <div>
+            <BotaoAnexar jaEscolhidos={arquivos} onEscolher={(novos) => setArquivos((a) => [...a, ...novos])} onAviso={setErro} rotulo="📎 Anexar comprovantes (PDF, fotos…)" />
+          </div>
+        </div>
+      )}
+
       <button type="submit" disabled={salvando} style={{ padding: "13px 0", borderRadius: 12, border: "none", background: corTipo, color: "#fff", fontSize: 14.5, fontWeight: 800, cursor: "pointer" }}>
-        {salvando ? "Salvando…" : "Lançar"}
+        {salvando ? (arquivos.length > 0 ? "Salvando e enviando anexos…" : "Salvando…") : "Lançar"}
       </button>
     </form>
   );

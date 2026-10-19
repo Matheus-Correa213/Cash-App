@@ -19,8 +19,12 @@
 //   ANTHROPIC_API_KEY      = sua chave da API da Anthropic (console.anthropic.com)
 
 import { createClient } from "@supabase/supabase-js";
+import { lerAnexos } from "./_lib/anexos-leitura.js";
 
 const MODELO = "claude-sonnet-4-6";
+
+// Ler PDF/fotos e responder pode passar do tempo padrão de uma função.
+export const config = { maxDuration: 60 };
 
 // Migração 10 (categorias personalizadas, 16/09/2026): antes a descrição de
 // "categoria" era um texto fixo com as 6 frentes de gasto e 4 fontes de
@@ -75,6 +79,23 @@ function montarFerramentas(categoriasResumo) {
         limite_disponivel: { type: "number", description: "Só pra cartões — o valor REAL do limite disponível AGORA, se o usuário informar (ex: 'limite disponível: 3.209,15'). SEMPRE inclua este campo quando o usuário mandar esse número, mesmo junto com limite e fatura_atual — NÃO é redundante: o disponível real do banco costuma ser menor que 'limite − fatura atual' quando existem compras parceladas em andamento que ainda não apareceram na fatura (elas já consomem o limite, mas só entram na fatura mês a mês). O app usa a diferença pra saber quanto do limite está preso nessas parcelas futuras que ele ainda não conhece uma por uma." },
       },
       required: ["acao"],
+    },
+  },
+  {
+    name: "propor_transferencia",
+    description: "Monta uma PROPOSTA de transferência de dinheiro ENTRE DUAS CONTAS da própria família (ex: do Nubank pro Inter, sacar do banco pra carteira em dinheiro, depositar a carteira numa conta, mover pra poupança). NÃO é gasto nem receita — o total de gastos/receitas não muda, só o saldo das duas contas. Não use pra pagar fatura de cartão, nem pra pagar/enviar dinheiro a outra pessoa (isso é um gasto). Não grava nada — só propõe, a pessoa confirma na tela.",
+    input_schema: {
+      type: "object",
+      properties: {
+        origem_id: { type: "string", description: "O id EXATO ([id: ...] da lista de contas) da conta de onde o dinheiro SAI." },
+        origem_nome: { type: "string", description: "Nome da conta de origem (exibição e reforço caso o id não bata)." },
+        destino_id: { type: "string", description: "O id EXATO da conta pra onde o dinheiro VAI." },
+        destino_nome: { type: "string", description: "Nome da conta de destino." },
+        valor: { type: "number" },
+        data: { type: "string", description: "Data no formato YYYY-MM-DD. Se não souber, use a data de hoje." },
+        descricao: { type: "string", description: "Observação curta opcional (ex: 'saque pra feira')." },
+      },
+      required: ["origem_nome", "destino_nome", "valor"],
     },
   },
   {
@@ -179,6 +200,8 @@ Categorias de receita desta família (fixas + personalizadas): ${listaCategorias
 
 Regras importantes:
 - Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Se ele mencionar com qual conta ou cartão pagou (ou for óbvio pelo contexto), inclua também o pago_com_id copiado da lista de contas/cartões acima — sem isso, o app pode não conseguir identificar a conta/cartão certo só pelo nome, e o lançamento fica sem tirar de lugar nenhum. Nunca diga que "já lançou" — apenas proponha.
+- Se o usuário disser que passou/transferiu/sacou/depositou dinheiro ENTRE DUAS contas/carteiras dele (ex: "passei 500 do Nubank pro Inter", "saquei 200 do banco pra carteira"): chame propor_transferencia com origem_id e destino_id copiados da lista de contas acima — NUNCA propor_lancamento pra isso (transferência não é gasto nem receita). Se ele mandar várias transferências, chame a ferramenta uma vez para cada, em paralelo. Pagar fatura de cartão e enviar dinheiro a outra pessoa NÃO são transferências entre contas dele.
+- O usuário pode anexar VÁRIOS arquivos de uma vez: fotos, PDFs (extratos, comprovantes, faturas), documentos Word, texto ou CSV. Leia todos. Se um arquivo tiver um lançamento (um comprovante), proponha-o; se tiver vários (extrato, fatura), chame propor_lancamento uma vez por lançamento, em paralelo — mas, passando de uns 15 lançamentos, proponha só os primeiros e diga pra usar "Importar e anexar" (em Mais) pra o resto. Se algum arquivo não puder ser lido (veja o aviso no fim da mensagem do usuário, se houver), diga isso em uma frase. Se ele só mandou o arquivo sem texto, descreva em uma frase o que viu e proponha o que fizer sentido.
 - Se o usuário pedir pra criar, renomear, trocar cor/emoji, ou excluir uma categoria: chame propor_categoria. Isso vale pra QUALQUER categoria — as 10 da doutrina financeira listadas acima não são fixas, também podem ser editadas ou excluídas, por você ou pela pessoa direto na tela "Categorias". Pra editar/excluir uma que já existe, sempre inclua chave_existente copiada EXATAMENTE da lista de categorias acima (é assim que o app acha o registro certo — não é por nome).
 - Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só. NUNCA pule nenhum item da lista que o usuário mandou, mesmo que sejam 5, 10 ou mais — cada conta/cartão mencionado vira uma chamada de ferramenta própria.
 - Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome, mesmo que o usuário não escreva exatamente igual — "Nubank" no texto do usuário deve casar com "Nubank Croma" da lista, por exemplo) — se já existe algo parecido, use 'atualizar_*' e SEMPRE inclua id_existente copiado EXATAMENTE do campo [id: ...] correspondente da lista acima (é assim que o app encontra o registro certo — não é feito por nome). Só use 'criar_*' quando realmente não existir nada parecido na lista.
@@ -205,10 +228,11 @@ export default async function handler(req, res) {
   const token = (req.headers.authorization || "").replace(/^Bearer\s+/i, "");
   if (!token) return res.status(401).json({ error: "Não autenticado." });
 
-  const { mensagem, imagemBase64, imagemMimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: hojeCliente } = req.body || {};
+  const { mensagem, imagemBase64, imagemMimeType, anexos, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: hojeCliente } = req.body || {};
   // "Hoje" vem do navegador (fuso de quem usa); sem isso, a data do servidor.
   const hoje = /^\d{4}-\d{2}-\d{2}$/.test(hojeCliente || "") ? hojeCliente : new Date().toISOString().slice(0, 10);
-  if (!mensagem && !imagemBase64) return res.status(400).json({ error: "Envie uma mensagem ou uma imagem." });
+  const temAnexos = Array.isArray(anexos) && anexos.length > 0;
+  if (!mensagem && !imagemBase64 && !temAnexos) return res.status(400).json({ error: "Envie uma mensagem ou um arquivo." });
 
   const supabase = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: `Bearer ${token}` } } });
 
@@ -301,17 +325,28 @@ export default async function handler(req, res) {
 
   const conteudoUsuario = [];
   if (mensagem) conteudoUsuario.push({ type: "text", text: mensagem });
+  // Formato antigo (uma foto em base64 no corpo) — mantido por compatibilidade.
   if (imagemBase64) {
     conteudoUsuario.push({ type: "image", source: { type: "base64", media_type: imagemMimeType || "image/jpeg", data: imagemBase64 } });
     if (!mensagem) conteudoUsuario.push({ type: "text", text: "Leia este comprovante e proponha o lançamento correspondente." });
+  }
+  // Formato novo (19/10/2026): vários arquivos já no Storage, lidos com o token da pessoa.
+  if (temAnexos) {
+    const { blocos, avisos, lidos } = await lerAnexos(supabase, anexos);
+    conteudoUsuario.push(...blocos);
+    if (avisos.length > 0) conteudoUsuario.push({ type: "text", text: `[Aviso do app: ${avisos.join(" ")}]` });
+    if (lidos === 0 && !mensagem) {
+      return res.status(200).json({ texto: `Não consegui ler nenhum dos arquivos. ${avisos.join(" ")}`.trim(), propostas: [] });
+    }
+    if (!mensagem) conteudoUsuario.push({ type: "text", text: "Leia o(s) arquivo(s) e proponha o que fizer sentido (lançamentos, transferências...)." });
   }
 
   const mensagens = [{ role: "user", content: conteudoUsuario }];
 
   const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo, hoje);
   const ferramentas = montarFerramentas(categoriasResumo);
-  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento"]);
-  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento" };
+  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento", "propor_transferencia"]);
+  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento", propor_transferencia: "transferencia" };
 
   try {
     let propostas = [];

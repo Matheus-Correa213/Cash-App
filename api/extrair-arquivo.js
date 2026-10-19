@@ -12,10 +12,14 @@
 //   ANTHROPIC_API_KEY, SUPABASE_URL, SUPABASE_ANON_KEY
 
 import { createClient } from "@supabase/supabase-js";
+import { baixarAnexo, mimeEfetivo } from "./_lib/anexos-leitura.js";
 
 const MODELO = "claude-sonnet-4-6";
 
-export const config = { api: { bodyParser: { sizeLimit: "15mb" } } };
+// bodyParser de 15 MB mantém o formato antigo (arquivo em base64 no corpo)
+// funcionando; o formato novo manda só o `caminho` do arquivo no Storage (a
+// Vercel limita o corpo a ~4,5 MB, então arquivo grande só passa pelo Storage).
+export const config = { maxDuration: 60, api: { bodyParser: { sizeLimit: "15mb" } } };
 
 // Migração 10 (categorias personalizadas, 16/09/2026): a descrição de
 // "categoria" era um texto fixo com as 6 frentes de gasto e 4 fontes de
@@ -88,7 +92,18 @@ export default async function handler(req, res) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return res.status(401).json({ error: "Sessão inválida." });
 
-  const { nomeArquivo, mimeType, base64, categoriasResumo } = req.body || {};
+  let { nomeArquivo, mimeType, base64, caminho, categoriasResumo } = req.body || {};
+  // Formato novo (19/10/2026): o arquivo já está no Storage; baixa com o token
+  // da própria pessoa (o RLS do Storage garante que é da família dela).
+  if (caminho) {
+    try {
+      const buffer = await baixarAnexo(supabase, caminho);
+      base64 = buffer.toString("base64");
+      mimeType = mimeEfetivo(mimeType, nomeArquivo);
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
+  }
   if (!base64 || !mimeType) return res.status(400).json({ error: "Envie um arquivo." });
   const ferramentaExtracao = montarFerramentaExtracao(categoriasResumo);
 
@@ -96,10 +111,20 @@ export default async function handler(req, res) {
     let conteudoUsuario;
     const ehImagem = mimeType.startsWith("image/");
 
+    if (ehImagem && !/^image\/(jpeg|png|gif|webp)$/.test(mimeType)) {
+      return res.status(415).json({ error: `Esse formato de imagem (${mimeType}) o COSMO não lê — use JPG, PNG ou WebP.` });
+    }
     if (ehImagem) {
       conteudoUsuario = [
         { type: "image", source: { type: "base64", media_type: mimeType, data: base64 } },
         { type: "text", text: `Leia esta imagem (${nomeArquivo || "comprovante"}) e liste os lançamentos financeiros nela contidos, usando a ferramenta lancamentos_encontrados.` },
+      ];
+    } else if (mimeType === "application/pdf") {
+      // O PDF vai inteiro pro modelo (ele lê o texto E as imagens das páginas,
+      // então extrato escaneado também funciona — o pdf-parse só devolvia texto).
+      conteudoUsuario = [
+        { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+        { type: "text", text: `Este é um PDF (${nomeArquivo || "arquivo"}). Liste todos os lançamentos financeiros (gastos e receitas) que conseguir identificar, usando a ferramenta lancamentos_encontrados.` },
       ];
     } else {
       const texto = await extrairTexto(mimeType, base64);
@@ -113,7 +138,7 @@ export default async function handler(req, res) {
       method: "POST",
       headers: { "content-type": "application/json", "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
       body: JSON.stringify({
-        model: MODELO, max_tokens: 2048,
+        model: MODELO, max_tokens: 8192,
         system: "Você extrai lançamentos financeiros de documentos e imagens pra um app de finanças de um casal. Nunca invente valores que não estão no arquivo. Se não achar nada, devolva uma lista vazia.",
         tools: [ferramentaExtracao],
         tool_choice: { type: "tool", name: "lancamentos_encontrados" },

@@ -141,8 +141,8 @@ export function montarCartoes({ cartoes = [], contas = [], lancamentosCartao = [
   };
 }
 
-export function montarContas({ contas = [], lancamentos = [] }) {
-  const saldo = saldosPorConta(lancamentos, contas);
+export function montarContas({ contas = [], lancamentos = [], transferencias = [] }) {
+  const saldo = saldosPorConta(lancamentos, contas, transferencias);
   const lista = contas.map((c) => ({ nome: c.nome, tipo: c.tipo, instituicao: c.instituicao || null, titular: c.titular || null, saldo: arred(saldo[c.id]), entra_no_saldo_total: c.tipo !== "poupanca" }));
   return { contas: lista, saldo_total_sem_poupanca: arred(lista.filter((c) => c.entra_no_saldo_total).reduce((s, c) => s + c.saldo, 0)), saldo_em_poupanca: arred(lista.filter((c) => !c.entra_no_saldo_total).reduce((s, c) => s + c.saldo, 0)) };
 }

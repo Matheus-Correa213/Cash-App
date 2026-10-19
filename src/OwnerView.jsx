@@ -11,9 +11,10 @@ import Relatorios from "./Relatorios.jsx";
 import Assinaturas from "./Assinaturas.jsx";
 import ChatCosmo, { textoEstrategiaPagamento } from "./ChatCosmo.jsx";
 import ImportarArquivo from "./ImportarArquivo.jsx";
+import Transferir from "./Transferir.jsx";
 import Categorias from "./Categorias.jsx";
 import Planejamento from "./Planejamento.jsx";
-import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconChevronRight, IconUsers, IconStar, IconCalendar, ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, resolverIconeCategoria } from "./Icons.jsx";
+import { IconHomeNav, IconArrowUp, IconArrowDown, IconGrid, IconCard, IconRefresh, IconTrendingUp, IconBarChart, IconCosmo, IconUpload, IconTransfer, IconChevronRight, IconUsers, IconStar, IconCalendar, ICONE_FRENTE_GASTO, ICONE_FONTE_RECEITA, resolverIconeCategoria } from "./Icons.jsx";
 
 const wrap = { padding: 18, maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 16, paddingBottom: 90 };
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18 };
@@ -328,7 +329,9 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
       />
     );
   }
-  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} onVoltar={() => setTela(null)} />;
+  if (tela === "contas") return <ContasCartoes familiaId={membro.familia_id} onAbrirCartao={(id) => setTela(`cartao:${id}`)} onTransferir={() => setTela("transferir")} onVoltar={() => setTela(null)} />;
+  // Transferência entre contas (migração 18, 19/10/2026): tabela própria, não é gasto nem receita.
+  if (tela === "transferir") return <Transferir membro={membro} contas={contas} onVoltar={() => setTela("contas")} onSalvo={onSalvo} />;
   if (tela === "investimentos") return <Investimentos familiaId={membro.familia_id} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
   if (tela === "relatorios") return <Relatorios familiaId={membro.familia_id} frentesGasto={frentesGasto} onVoltar={() => setTela(null)} />;
   if (tela === "assinaturas") return <Assinaturas familiaId={membro.familia_id} contas={contas} cartoes={cartoes} podeEditar={podeEditar} onVoltar={() => setTela(null)} />;
@@ -385,6 +388,7 @@ function TelaMais({ tela, setTela, membro, membros, contas, cartoes, categorias,
 
   const itens = [
     { chave: "contas", label: "Contas e cartões", Icone: IconCard, cor: C.accent, corSoft: C.accentSoft },
+    { chave: "transferir", label: "Transferir entre contas", Icone: IconTransfer, cor: C.green, corSoft: C.greenSoft },
     { chave: "categorias", label: "Categorias", Icone: IconStar, cor: C.gold, corSoft: C.amberSoft },
     { chave: "planejamento", label: "Planejamento financeiro", Icone: IconCalendar, cor: "#5B3FD9", corSoft: C.purpleSoft },
     { chave: "assinaturas", label: "Assinaturas", Icone: IconRefresh, cor: C.purple, corSoft: C.purpleSoft },

@@ -1,6 +1,6 @@
 // Testa a conta do resumo que o COSMO lê. Rodar: node tests/resumo.test.mjs
 import assert from "node:assert/strict";
-import { calcularResumo, inicioDoMes } from "../api/_lib/resumo-calculo.js";
+import { calcularResumo, inicioDoMes, saldosPorConta } from "../api/_lib/resumo-calculo.js";
 
 let ok = 0; const t = (n, f) => { try { f(); ok++; console.log("ok  ", n); } catch (e) { console.error("FALHOU", n, e); process.exitCode = 1; } };
 const M = "2026-10-01";
@@ -88,5 +88,24 @@ t("meses pedidos: só YYYY-MM válidos, sem repetir; vazio = atual e próximo", 
   assert.deepEqual(mesesPedidos("2026-10, 2026-10,xx,2026-13,2026-12", "2026-10"), ["2026-10", "2026-12"]);
   assert.deepEqual(mesesPedidos("", "2026-12"), ["2026-12", "2027-01"]);
   assert.equal(mesesPedidos(Array.from({ length: 20 }, (_, i) => `2026-${String((i % 12) + 1).padStart(2, "0")}`).join(","), "2026-01").length, 12);
+});
+
+t("transferência entre contas move saldo mas NÃO vira gasto nem receita", () => {
+  const contas = [{ id: "c1", tipo: "corrente", saldo_inicial: 1000 }, { id: "c2", tipo: "carteira", saldo_inicial: 50 }, { id: "p1", tipo: "poupanca", saldo_inicial: 5000 }];
+  const lancs = [L({ valor: 100 })];
+  const sem = calcularResumo({ ...base, contas, lancamentos: lancs });
+  const com = calcularResumo({ ...base, contas, lancamentos: lancs, transferencias: [{ origem_conta_id: "c1", destino_conta_id: "c2", valor: 300 }] });
+  assert.equal(com.total_gastos, sem.total_gastos);
+  assert.equal(com.total_receitas, sem.total_receitas);
+  assert.equal(com.saldo, sem.saldo); // c1 -300, c2 +300: o total sem poupança não muda
+  const paraPoupanca = calcularResumo({ ...base, contas, lancamentos: lancs, transferencias: [{ origem_conta_id: "c1", destino_conta_id: "p1", valor: 200 }] });
+  assert.equal(paraPoupanca.saldo, sem.saldo - 200); // mover pra poupança tira da soma "sem poupança"
+});
+
+t("saldosPorConta: transferência soma no destino e tira da origem; conta excluída (null) é ignorada", () => {
+  const contas = [{ id: "a", saldo_inicial: 100 }, { id: "b", saldo_inicial: 0 }];
+  const s = saldosPorConta([], contas, [{ origem_conta_id: "a", destino_conta_id: "b", valor: 40.5 }, { origem_conta_id: null, destino_conta_id: "b", valor: 10 }]);
+  assert.equal(s.a, 59.5);
+  assert.equal(s.b, 50.5);
 });
 console.log(ok + " testes passaram");

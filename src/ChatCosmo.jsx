@@ -1,9 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe, moeda, mesDaFatura } from "./theme.js";
 import { IconCosmoFull, IconChevronLeft, IconSend, IconReceiptScan } from "./Icons.jsx";
 import { PALETA_CORES, normalizarChave } from "./CategoriaCampos.jsx";
 import { resumoPlanejamentoParaCosmo, projecaoMensal } from "./planejamentoCalculo.js";
+import { ACCEPT_LEITURA, abrirAnexo, ehImagem, subirArquivos, validarEscolha } from "./anexosUtil.js";
+import { ArquivosPendentes, MiniaturaAnexo } from "./Anexos.jsx";
 
 // Chat com o COSMO, versão financeira. A IA só PROPÕE (ver api/chat.js) — o
 // lançamento de verdade só acontece quando a pessoa aperta "Confirmar e
@@ -48,10 +50,34 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   const [carregandoHistorico, setCarregandoHistorico] = useState(true);
   const [texto, setTexto] = useState("");
   const [enviando, setEnviando] = useState(false);
+  const [subindo, setSubindo] = useState(false);
   const [erro, setErro] = useState("");
+  // Arquivos escolhidos (vários, de uma vez) que ainda não foram enviados —
+  // 19/10/2026, pedido do Matheus: "poder anexar PDF, fotos e tudo (...) e mais
+  // de um anexo de uma vez". Antes, escolher UMA foto já enviava na hora.
+  const [anexosPendentes, setAnexosPendentes] = useState([]);
   const inputArquivo = useRef(null);
+  // Correção 19/10/2026 ("o chat precisa abrir a partir da última conversa, ele
+  // abre na mais antiga"): a lista de mensagens nunca era rolada até o fim — o
+  // chat abria no topo (a mensagem mais antiga). Agora ela cola no fim ao abrir,
+  // a cada mensagem nova e quando uma miniatura termina de carregar — a menos
+  // que a pessoa tenha subido a tela pra reler algo.
+  const rolagem = useRef(null);
+  const colarNoFim = useRef(true);
   const areaTexto = useRef(null);
   const enviouInicial = useRef(false);
+
+  function rolarParaOFim() {
+    const el = rolagem.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+  function aoRolar() {
+    const el = rolagem.current;
+    if (el) colarNoFim.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+  useLayoutEffect(() => {
+    if (colarNoFim.current) rolarParaOFim();
+  }, [mensagens, carregandoHistorico, enviando, subindo, erro]);
 
   useEffect(() => {
     let cancelado = false;
@@ -62,14 +88,22 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
           .from("chat_mensagens")
           .select("*")
           .eq("membro_id", membro.id)
-          .order("created_at", { ascending: true })
+          // As 200 MAIS RECENTES (ordem decrescente + limite) e depois
+          // invertidas pra mostrar em ordem — com ordem crescente, o limite
+          // cortaria justamente as últimas mensagens quando a conversa passasse
+          // de 200.
+          .order("created_at", { ascending: false })
           .limit(200);
         if (error) throw error;
         if (!cancelado && data && data.length > 0) {
-          setMensagens(data.map((m) => ({
+          colarNoFim.current = true;
+          setMensagens(data.slice().reverse().map((m) => ({
             dbId: m.id,
             autor: m.autor,
-            texto: m.texto,
+            anexos: Array.isArray(m.anexos) ? m.anexos : [],
+            // "📎 Arquivo enviado" é só o texto-reserva salvo quando a mensagem
+            // não tinha texto — com as miniaturas na bolha, não precisa dele.
+            texto: (Array.isArray(m.anexos) && m.anexos.length > 0 && /^📎 /.test(m.texto || "")) ? null : m.texto,
             propostas: m.propostas || [],
             confirmadas: m.confirmadas || (m.propostas || []).map(() => false),
           })));
@@ -116,28 +150,55 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   function aoTeclar(e) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      if (texto.trim() && !enviando) {
-        enviar(texto.trim());
-        requestAnimationFrame(() => ajustarAltura(areaTexto.current));
-      }
+      enviarDaCaixa();
     }
   }
 
-  async function enviar(mensagemTexto, imagem) {
+  async function enviar(mensagemTexto, arquivos = []) {
     setErro("");
     setEnviando(true);
-    const minhaMensagem = { autor: "usuario", texto: mensagemTexto, imagemPreview: imagem?.preview };
+    colarNoFim.current = true;
+
+    // Primeiro sobe os arquivos pro Storage (vão direto do navegador: o corpo
+    // de uma chamada à Vercel aceita só ~4,5 MB). Se algum falhar, nada é
+    // enviado e o texto/arquivos continuam na caixa pra tentar de novo.
+    let metas = [];
+    if (arquivos.length > 0) {
+      setSubindo(true);
+      try {
+        metas = await subirArquivos(membro.familia_id, arquivos);
+      } catch (e) {
+        setErro(e.message || "Não consegui enviar os arquivos.");
+        setSubindo(false); setEnviando(false);
+        return;
+      }
+      setSubindo(false);
+    }
+
+    const minhaMensagem = { autor: "usuario", texto: mensagemTexto, anexos: metas };
     setMensagens((m) => [...m, minhaMensagem]);
     setTexto("");
+    setAnexosPendentes([]);
 
     // Salva sua mensagem no banco em paralelo, sem bloquear o envio pro
     // COSMO — se isso falhar (rede, migração 5 ainda não rodada), a
     // conversa desta sessão continua funcionando normalmente, só não fica
     // salva pra próxima vez que você abrir o chat.
-    supabase.from("chat_mensagens").insert({
+    const linhaUsuario = {
       familia_id: membro.familia_id, membro_id: membro.id, autor: "usuario",
-      texto: mensagemTexto || (imagem ? "📎 Comprovante enviado" : null),
-    }).then(({ error }) => { if (error) console.error("Não consegui salvar sua mensagem no histórico:", error.message); });
+      texto: mensagemTexto || (metas.length > 1 ? `📎 ${metas.length} arquivos enviados` : metas.length === 1 ? "📎 Arquivo enviado" : null),
+    };
+    if (metas.length > 0) linhaUsuario.anexos = metas;
+    supabase.from("chat_mensagens").insert(linhaUsuario).then(({ error }) => {
+      if (!error) return;
+      console.error("Não consegui salvar sua mensagem no histórico:", error.message);
+      // Migração 18 ainda não rodada (coluna "anexos" não existe): salva ao
+      // menos o texto.
+      if (metas.length > 0 && /anexos/i.test(error.message)) {
+        const { anexos: _ignorado, ...semAnexos } = linhaUsuario;
+        supabase.from("chat_mensagens").insert(semAnexos).then(() => {});
+      }
+    });
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -167,7 +228,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
       const resp = await fetch("/api/chat", {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${session?.access_token || ""}` },
-        body: JSON.stringify({ mensagem: mensagemTexto || undefined, imagemBase64: imagem?.base64, imagemMimeType: imagem?.mimeType, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: dataLocalISO() }),
+        body: JSON.stringify({ mensagem: mensagemTexto || undefined, anexos: metas.length > 0 ? metas.map((a) => ({ caminho: a.caminho, nome: a.nome, mime_type: a.mime_type })) : undefined, contasResumo, cartoesResumo, categoriasResumo, planejamentoResumo, projecaoMeses, hoje: dataLocalISO() }),
       });
       const dados = await resp.json();
       if (!resp.ok) throw new Error(dados.error || "Erro ao falar com o COSMO.");
@@ -202,16 +263,21 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     if (error) console.error("Não consegui salvar a confirmação no histórico:", error.message);
   }
 
-  function onEscolherArquivo(e) {
-    const arquivo = e.target.files?.[0];
-    if (!arquivo) return;
-    const leitor = new FileReader();
-    leitor.onload = () => {
-      const base64 = String(leitor.result).split(",")[1];
-      enviar(null, { base64, mimeType: arquivo.type, preview: URL.createObjectURL(arquivo) });
-    };
-    leitor.readAsDataURL(arquivo);
+  // Aceita VÁRIOS arquivos de uma vez (foto, PDF, Word, texto/CSV); só ficam
+  // na caixa até a pessoa apertar enviar (com ou sem texto junto).
+  function onEscolherArquivos(e) {
+    const novos = Array.from(e.target.files || []);
     e.target.value = "";
+    if (novos.length === 0) return;
+    const { aceitos, avisos } = validarEscolha(anexosPendentes, novos, { soLeitura: true });
+    setErro(avisos.join(" "));
+    if (aceitos.length > 0) setAnexosPendentes((atual) => [...atual, ...aceitos]);
+  }
+
+  function enviarDaCaixa() {
+    if ((!texto.trim() && anexosPendentes.length === 0) || enviando) return;
+    enviar(texto.trim(), anexosPendentes);
+    requestAnimationFrame(() => ajustarAltura(areaTexto.current));
   }
 
   async function confirmarLancamento(dados) {
@@ -550,6 +616,28 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     return `${rotuloDescricao} movido pra ${infoNova?.label || dados.categoria_nova}`;
   }
 
+  // Transferência entre contas (migração 18, 19/10/2026): o COSMO propõe
+  // (propor_transferencia) e é aqui, no navegador, que ela é gravada — em
+  // `transferencias`, que não é gasto nem receita. Acha as duas contas por id
+  // (confiável) com o nome tolerante como reforço; recusa origem = destino.
+  async function confirmarTransferencia(dados) {
+    const origem = encontrarAlvo(contas, { id_existente: dados.origem_id, nome: dados.origem_nome });
+    const destino = encontrarAlvo(contas, { id_existente: dados.destino_id, nome: dados.destino_nome });
+    if (!origem) throw new Error(`Não encontrei a conta de origem "${dados.origem_nome || ""}" — confira o nome em Contas e cartões.`);
+    if (!destino) throw new Error(`Não encontrei a conta de destino "${dados.destino_nome || ""}" — confira o nome em Contas e cartões.`);
+    if (origem.id === destino.id) throw new Error("Origem e destino são a mesma conta — não dá pra transferir pra ela mesma.");
+    const valor = Number(dados.valor);
+    if (!(valor > 0)) throw new Error("O valor da transferência precisa ser maior que zero.");
+    const { data, error } = await supabase.from("transferencias").insert({
+      familia_id: membro.familia_id, membro_id: membro.id,
+      origem_conta_id: origem.id, destino_conta_id: destino.id,
+      valor, data: dados.data || dataLocalISO(), descricao: dados.descricao || null,
+    }).select();
+    if (error) throw error;
+    if (!data || data.length === 0) throw new Error("A transferência não foi salva — o banco não confirmou.");
+    return `Transferido ${moeda(valor)} de ${origem.nome} para ${destino.nome}`;
+  }
+
   // Devolve um texto descrevendo exatamente o que aconteceu (criou ou
   // atualizou o quê, com qual valor) — é esse texto que fica gravado em
   // `confirmadas` no lugar de um `true` genérico, pra quem olha o chat depois
@@ -560,6 +648,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     if (proposta.natureza === "lancamento") return await confirmarLancamento(proposta.dados);
     if (proposta.natureza === "categoria") return await confirmarCategoria(proposta.dados);
     if (proposta.natureza === "editar_lancamento") return await confirmarEditarLancamento(proposta.dados);
+    if (proposta.natureza === "transferencia") return await confirmarTransferencia(proposta.dados);
     return await confirmarContaOuCartao(proposta.dados);
   }
 
@@ -626,7 +715,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
         ))}
       </div>
 
-      <div style={{ flex: 1, overflowY: "auto", padding: "8px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
+      <div ref={rolagem} onScroll={aoRolar} style={{ flex: 1, overflowY: "auto", padding: "8px 18px", display: "flex", flexDirection: "column", gap: 12 }}>
         {carregandoHistorico && <div style={{ fontSize: 12, color: C.inkFaint }}>Carregando sua conversa com o COSMO…</div>}
         {!carregandoHistorico && mensagens.length === 0 && (
           <Bolha mensagem={{ autor: "cosmo", texto: SAUDACAO }} onConfirmar={() => {}} onConfirmarTodas={() => {}} />
@@ -636,30 +725,36 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
             key={m.dbId || i}
             mensagem={m}
             frentesGasto={frentesGasto} fontesReceita={fontesReceita}
+            aoCarregarImagem={() => { if (colarNoFim.current) rolarParaOFim(); }}
             onConfirmar={(indiceProposta, proposta) => confirmarItem(i, m.dbId, indiceProposta, proposta, m.confirmadas)}
             onConfirmarTodas={() => confirmarTodas(i, m.dbId, m.propostas, m.confirmadas)}
           />
         ))}
-        {enviando && <div style={{ fontSize: 12, color: C.inkFaint }}>o COSMO está pensando…</div>}
+        {enviando && <div style={{ fontSize: 12, color: C.inkFaint }}>{subindo ? "enviando os arquivos…" : "o COSMO está pensando…"}</div>}
         {erro && <div style={{ fontSize: 12, color: C.danger }}>{erro}</div>}
       </div>
 
+      {anexosPendentes.length > 0 && (
+        <div style={{ padding: "8px 14px 0", borderTop: `1px solid ${C.line}` }}>
+          <ArquivosPendentes arquivos={anexosPendentes} onRemover={(i) => setAnexosPendentes((a) => a.filter((_, j) => j !== i))} />
+        </div>
+      )}
       <form
-        onSubmit={(e) => { e.preventDefault(); if (texto.trim()) { enviar(texto.trim()); requestAnimationFrame(() => ajustarAltura(areaTexto.current)); } }}
-        style={{ display: "flex", alignItems: "flex-end", gap: 10, padding: "10px 14px", borderTop: `1px solid ${C.line}` }}
+        onSubmit={(e) => { e.preventDefault(); enviarDaCaixa(); }}
+        style={{ display: "flex", alignItems: "flex-end", gap: 10, padding: "10px 14px", borderTop: anexosPendentes.length > 0 ? "none" : `1px solid ${C.line}` }}
       >
-        <input ref={inputArquivo} type="file" accept="image/*" hidden onChange={onEscolherArquivo} />
-        <button type="button" onClick={() => inputArquivo.current?.click()} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.line, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} title="Anexar foto">
+        <input ref={inputArquivo} type="file" multiple accept={ACCEPT_LEITURA} hidden onChange={onEscolherArquivos} />
+        <button type="button" onClick={() => inputArquivo.current?.click()} disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.line, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }} title="Anexar fotos, PDF ou outros arquivos (vários de uma vez)">
           <IconReceiptScan size={16} color={C.inkMute} strokeWidth={1.9} />
         </button>
         <textarea
           ref={areaTexto}
           value={texto} onChange={aoDigitar} onKeyDown={aoTeclar}
-          placeholder="Fale com o COSMO ou anexe um arquivo… (Enter envia, Shift+Enter quebra linha)"
+          placeholder={anexosPendentes.length > 0 ? "Diga o que fazer com os arquivos (ou só envie)…" : "Fale com o COSMO ou anexe arquivos… (Enter envia, Shift+Enter quebra linha)"}
           rows={1}
           style={{ flex: 1, padding: "10px 16px", borderRadius: 18, border: `1px solid ${C.line}`, fontSize: 13.5, fontFamily: "inherit", resize: "none", overflowY: "auto", maxHeight: 120, lineHeight: 1.4 }}
         />
-        <button type="submit" disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.accent, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <button type="submit" disabled={enviando} style={{ width: 36, height: 36, borderRadius: "50%", border: "none", background: C.accent, color: "#fff", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, opacity: enviando ? 0.6 : 1 }}>
           <IconSend size={15} color="#fff" strokeWidth={2.1} />
         </button>
       </form>
@@ -667,14 +762,26 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
   );
 }
 
-function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmarTodas }) {
+function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmarTodas, aoCarregarImagem }) {
   const deUsuario = mensagem.autor === "usuario";
   const propostas = mensagem.propostas || [];
   const pendentes = propostas.filter((_, idx) => !mensagem.confirmadas?.[idx]).length;
   return (
     <div style={{ display: "flex", justifyContent: deUsuario ? "flex-end" : "flex-start" }}>
       <div style={{ maxWidth: "85%", display: "flex", flexDirection: "column", gap: 8 }}>
-        {mensagem.imagemPreview && <img src={mensagem.imagemPreview} alt="comprovante" style={{ width: 170, borderRadius: 12 }} />}
+        {(mensagem.anexos || []).length > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: deUsuario ? "flex-end" : "flex-start" }}>
+            {mensagem.anexos.map((a, i) => (
+              <button key={`${a.caminho}-${i}`} type="button" onClick={() => abrirAnexo(a.caminho).catch((e) => alert(e.message))} title={a.nome}
+                style={ehImagem(a.mime_type)
+                  ? { border: "none", background: "transparent", padding: 0, cursor: "pointer" }
+                  : { display: "flex", alignItems: "center", gap: 6, border: `1px solid ${C.line}`, background: "#fff", borderRadius: 12, padding: "5px 10px 5px 6px", cursor: "pointer", maxWidth: 220 }}>
+                <MiniaturaAnexo caminho={a.caminho} mime={a.mime_type} nome={a.nome} tamanho={ehImagem(a.mime_type) ? 96 : 28} onCarregou={aoCarregarImagem} />
+                {!ehImagem(a.mime_type) && <span style={{ fontSize: 11.5, fontWeight: 700, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{a.nome}</span>}
+              </button>
+            ))}
+          </div>
+        )}
         {mensagem.texto && (
           <div style={{
             background: deUsuario ? C.accent : "#fff", color: deUsuario ? "#fff" : C.ink,
@@ -697,10 +804,11 @@ function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmar
             // a descrição exata do que foi feito) ou o booleano `true` de
             // confirmações salvas antes dessa mudança — nesse caso cai no
             // texto genérico de sempre, sem quebrar conversas antigas.
-            const texto = (typeof confirmada === "object" && confirmada.texto) ? confirmada.texto : (proposta.natureza === "lancamento" ? "Lançado" : "Salvo");
+            const texto = (typeof confirmada === "object" && confirmada.texto) ? confirmada.texto : (proposta.natureza === "lancamento" ? "Lançado" : proposta.natureza === "transferencia" ? "Transferido" : "Salvo");
             return <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {texto}</div>;
           }
           if (proposta.natureza === "lancamento") return <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          if (proposta.natureza === "transferencia") return <CardPropostaTransferencia key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "categoria") return <CardPropostaCategoria key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "editar_lancamento") return <CardPropostaEditarLancamento key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
           return <CardPropostaContaOuCartao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
@@ -818,6 +926,26 @@ function CardPropostaEditarLancamento({ dados, frentesGasto, fontesReceita, onCo
       <Linha label="Para" valor={rotulo(dados.categoria_nova)} />
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar</button>
+      </div>
+    </div>
+  );
+}
+
+// Transferência entre duas contas (migração 18) — não é gasto nem receita.
+function CardPropostaTransferencia({ dados, onConfirmar }) {
+  return (
+    <div style={{ background: "#fff", border: `1.5px solid ${C.accentSoft}`, borderRadius: 16, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase" }}>Transferência proposta</span>
+        <span style={{ fontSize: 16, fontWeight: 800, color: C.ink }}>{moeda(dados.valor)}</span>
+      </div>
+      <div style={{ height: 1, background: C.line }} />
+      <Linha label="Sai de" valor={dados.origem_nome || "?"} />
+      <Linha label="Vai para" valor={dados.destino_nome || "?"} />
+      {dados.data && <Linha label="Data" valor={dados.data} />}
+      {dados.descricao && <Linha label="Observação" valor={dados.descricao} />}
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar transferência</button>
       </div>
     </div>
   );

@@ -14,9 +14,15 @@ export function inicioDoMes(agora = new Date()) {
 
 const arredonda = (n) => Number(Number(n).toFixed(2));
 
-/** Saldo de cada conta: saldo_inicial + receitas − gastos lançados nela (mesma lógica da RPC saldos_contas()). */
-export function saldosPorConta(lancamentos = [], contas = []) {
+/** Saldo de cada conta: saldo_inicial + receitas − gastos lançados nela + transferências recebidas − enviadas
+ *  (mesma lógica da RPC saldos_contas(), migração 18). Transferência NÃO entra em gastos/receitas — só move saldo. */
+export function saldosPorConta(lancamentos = [], contas = [], transferencias = []) {
   const saldo = Object.fromEntries(contas.map((c) => [c.id, Number(c.saldo_inicial) || 0]));
+  for (const t of transferencias) {
+    const valor = Number(t.valor) || 0;
+    if (t.destino_conta_id && t.destino_conta_id in saldo) saldo[t.destino_conta_id] += valor;
+    if (t.origem_conta_id && t.origem_conta_id in saldo) saldo[t.origem_conta_id] -= valor;
+  }
   for (const l of lancamentos) {
     if (!l.conta_id || !(l.conta_id in saldo)) continue;
     const valor = Number(l.valor) || 0;
@@ -26,7 +32,7 @@ export function saldosPorConta(lancamentos = [], contas = []) {
   return saldo;
 }
 
-export function calcularResumo({ lancamentos = [], membros = [], contas = [], categorias = [], inicioMesISO }) {
+export function calcularResumo({ lancamentos = [], membros = [], contas = [], categorias = [], transferencias = [], inicioMesISO }) {
   const nomesPorId = Object.fromEntries(membros.map((m) => [m.id, m.nome]));
   const rotulo = {};
   for (const c of categorias) if (c.tipo === "gasto") rotulo[c.chave] = c.label;
@@ -48,7 +54,7 @@ export function calcularResumo({ lancamentos = [], membros = [], contas = [], ca
   }
 
   // Saldo real: saldo_inicial de cada conta + todos os lançamentos dela (mesma lógica da RPC saldos_contas()), sem poupança.
-  const saldoPorConta = saldosPorConta(lancamentos, contas);
+  const saldoPorConta = saldosPorConta(lancamentos, contas, transferencias);
   const saldo = contas.filter((c) => c.tipo !== "poupanca").reduce((s, c) => s + (saldoPorConta[c.id] ?? 0), 0);
 
   const arred = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, arredonda(v)]));

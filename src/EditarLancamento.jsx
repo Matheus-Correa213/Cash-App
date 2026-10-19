@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { supabase } from "./supabaseClient.js";
 import { C, instituicaoDe } from "./theme.js";
 import { IconCard, IconCash, IconCreditCard } from "./Icons.jsx";
+import Anexos from "./Anexos.jsx";
 
 // Editar um lançamento já existente (gasto OU receita) — pedido do Matheus
 // (leva 12, 25/09/2026): "precisamos poder editar os lançamentos, valores e
@@ -144,6 +145,11 @@ export default function EditarLancamento({ lancamento, membros, contas, cartoes,
         )}
         <input style={campoInput} placeholder="Tag (ex: Casamento)" value={tag} onChange={(e) => setTag(e.target.value)} />
       </div>
+
+      {/* Anexos (migração 18, 19/10/2026): comprovantes em PDF/foto/qualquer
+          arquivo, vários de uma vez. Sobem na hora (não dependem do botão
+          "Salvar alterações" — o lançamento já existe). */}
+      {lancamento.id && lancamento.familia_id && <Anexos lancamentoId={lancamento.id} familiaId={lancamento.familia_id} />}
 
       <div style={{ display: "flex", gap: 8 }}>
         <button type="submit" disabled={salvando} style={{ padding: "10px 16px", borderRadius: 10, border: "none", background: corTipo, color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>

@@ -102,7 +102,10 @@ export default async function handler(req, res) {
       const fim = f.mes ? `${new Date(Date.UTC(+f.mes.slice(0, 4), +f.mes.slice(5, 7), 1)).toISOString().slice(0, 10)}` : null;
       return res.status(200).json(montarCategorias({ lancamentos, categorias, inicioMesISO: inicio, fimExclusivoISO: fim }));
     }
-    if (parte === "contas") return res.status(200).json(montarContas({ contas: (await opcional(() => supabase.from("contas").select("*").order("nome"))), lancamentos }));
+    // Transferências entre contas (migração 18): só mexem nos saldos, não em gastos/receitas.
+    // Se a tabela ainda não existe, `opcional` devolve lista vazia.
+    const transferencias = await opcional(() => supabase.from("transferencias").select("origem_conta_id, destino_conta_id, valor").order("id"));
+    if (parte === "contas") return res.status(200).json(montarContas({ contas: (await opcional(() => supabase.from("contas").select("*").order("nome"))), lancamentos, transferencias }));
     if (parte === "cartoes") {
       const [cartoes, contasTodas, lancCartao] = await Promise.all([
         opcional(() => supabase.from("cartoes_credito").select("*").order("nome")),
@@ -130,7 +133,7 @@ export default async function handler(req, res) {
       return res.status(200).json(montarRecorrentes({ itens, assinaturas, cartoes, categorias }));
     }
 
-    return res.status(200).json(calcularResumo({ lancamentos, membros, contas, categorias, inicioMesISO }));
+    return res.status(200).json(calcularResumo({ lancamentos, membros, contas, categorias, transferencias, inicioMesISO }));
   } catch (e) {
     return res.status(500).json({ error: "Erro interno", detail: String(e) });
   }
