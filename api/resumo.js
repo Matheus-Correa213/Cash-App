@@ -100,7 +100,8 @@ export default async function handler(req, res) {
       const f = normalizarFiltros(req.query);
       const inicio = f.de || inicioMesISO;
       const fim = f.mes ? `${new Date(Date.UTC(+f.mes.slice(0, 4), +f.mes.slice(5, 7), 1)).toISOString().slice(0, 10)}` : null;
-      return res.status(200).json(montarCategorias({ lancamentos, categorias, inicioMesISO: inicio, fimExclusivoISO: fim }));
+      const cartoesNomes = await opcional(() => supabase.from("cartoes_credito").select("id, nome").order("nome"));
+      return res.status(200).json(montarCategorias({ lancamentos, categorias, cartoes: cartoesNomes, inicioMesISO: inicio, fimExclusivoISO: fim }));
     }
     // Transferências entre contas (migração 18): só mexem nos saldos, não em gastos/receitas.
     // Se a tabela ainda não existe, `opcional` devolve lista vazia.

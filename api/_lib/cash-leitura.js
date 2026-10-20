@@ -7,6 +7,7 @@
 import { faturasDeCartaoDoMes } from "../../src/planejamentoCalculo.js";
 import { mesDaFatura } from "../../src/theme.js";
 import { saldosPorConta } from "./resumo-calculo.js";
+import { gastosPorCategoria, gastosPorCartao } from "./relatorio-calculo.js";
 
 const SEM_CATEGORIA = "__sem_categoria__";
 const arred = (n) => Math.round(Number(n || 0) * 100) / 100;
@@ -81,7 +82,7 @@ export function montarLancamentos({ lancamentos = [], membros = [], contas = [],
 }
 
 /** Todas as categorias, com o total do período (regra do Painel: data >= início; com `fim`, até antes dele). */
-export function montarCategorias({ lancamentos = [], categorias = [], inicioMesISO, fimExclusivoISO = null }) {
+export function montarCategorias({ lancamentos = [], categorias = [], cartoes = [], inicioMesISO, fimExclusivoISO = null }) {
   const doPeriodo = lancamentos.filter((l) => l.data >= inicioMesISO && (!fimExclusivoISO || l.data < fimExclusivoISO));
   const acum = { gasto: {}, receita: {} };
   for (const l of doPeriodo) {
@@ -90,6 +91,10 @@ export function montarCategorias({ lancamentos = [], categorias = [], inicioMesI
     const x = (a[l.categoria] ||= { total: 0, cartao: 0 });
     if (l.tipo === "gasto" && l.cartao_id) { if (v > 0) x.cartao += v; } else x.total += v;
   }
+  // Visões dos Relatórios (20/10/2026): TOTAL = contas sem pagamento de fatura + compras no cartão; PARCIAL = só o que saiu de conta/carteira.
+  const calc = gastosPorCategoria(doPeriodo);
+  const porLinha = Object.fromEntries(calc.linhas.map((x) => [x.chave, x]));
+  const nomeCartao = Object.fromEntries(cartoes.map((c) => [c.id, c.nome]));
   const monta = (tipo) => {
     const conhecidas = categorias.filter((c) => c.tipo === tipo);
     const chaves = new Set(conhecidas.map((c) => c.chave));
@@ -97,11 +102,17 @@ export function montarCategorias({ lancamentos = [], categorias = [], inicioMesI
     return [...conhecidas, ...extras].map((c) => {
       const x = (acum[tipo] || {})[c.chave] || { total: 0, cartao: 0 };
       return tipo === "gasto"
-        ? { nome: c.label, chave: c.chave, gasto_no_periodo: arred(x.total), compras_no_cartao_no_periodo: arred(x.cartao) }
+        ? { nome: c.chave === "fatura_cartao" ? "Pagamento de fatura" : c.label, chave: c.chave, gasto_no_periodo: arred(x.total), compras_no_cartao_no_periodo: arred(x.cartao), total_com_cartoes_no_periodo: porLinha[c.chave]?.total ?? 0, parcial_no_periodo: porLinha[c.chave]?.parcial ?? 0 }
         : { nome: c.label, chave: c.chave, receita_no_periodo: arred(x.total) };
     });
   };
-  return { periodo: { de: inicioMesISO, ate_antes_de: fimExclusivoISO }, categorias_de_gasto: monta("gasto"), categorias_de_receita: monta("receita") };
+  return {
+    periodo: { de: inicioMesISO, ate_antes_de: fimExclusivoISO },
+    totais_de_gasto: { total_com_cartoes: calc.totalTotal, parcial_saiu_de_contas_e_carteiras: calc.parcialTotal, compras_no_cartao: calc.cartaoTotal, pagamento_de_fatura_dentro_do_parcial: calc.faturasPagas },
+    compras_por_cartao_no_periodo: Object.entries(gastosPorCartao(doPeriodo)).map(([id, x]) => ({ cartao: nomeCartao[id] || "Cartão", total: x.total, compras: x.qtd, por_categoria: x.porCategoria })).sort((a, b) => b.total - a.total),
+    legenda: "total_com_cartoes = gasto de contas (sem pagamento de fatura) + compras no cartão: o custo real. parcial = só o dinheiro que saiu de conta/carteira (inclui pagamento de fatura). Não some total com parcial. Pagamento antecipado/estorno no cartão não conta como compra.",
+    categorias_de_gasto: monta("gasto"), categorias_de_receita: monta("receita"),
+  };
 }
 
 /** Cartões: limite, fechamento/vencimento, fatura atual, disponível, parcelamentos em andamento e faturas dos próximos meses. */

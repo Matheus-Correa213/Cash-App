@@ -64,6 +64,24 @@ t("categorias: todas aparecem (mesmo zeradas), compra no cartão separada, sem c
   assert.equal(vazio.categorias_de_gasto.length, 2); // categorias sem lançamento continuam na lista
 });
 
+t("categorias: traz total (com cartões) x parcial e compras por cartão, sem contar a fatura duas vezes", () => {
+  const base = [
+    L({ categoria: "mercado", valor: 100 }),
+    L({ categoria: "mercado", valor: 300, cartao_id: "k1" }),
+    L({ categoria: "fatura_cartao", valor: 250 }),
+    L({ categoria: "fatura_cartao", valor: -250, cartao_id: "k1" }),
+  ];
+  const r = montarCategorias({ lancamentos: base, categorias, cartoes: [{ id: "k1", nome: "Nubank" }], inicioMesISO: "2026-10-01" });
+  assert.equal(r.totais_de_gasto.total_com_cartoes, 400);
+  assert.equal(r.totais_de_gasto.parcial_saiu_de_contas_e_carteiras, 350);
+  assert.equal(r.totais_de_gasto.pagamento_de_fatura_dentro_do_parcial, 250);
+  const m = r.categorias_de_gasto.find((c) => c.nome === "Mercado");
+  assert.equal(m.total_com_cartoes_no_periodo, 400); assert.equal(m.parcial_no_periodo, 100);
+  const f = r.categorias_de_gasto.find((c) => c.chave === "fatura_cartao");
+  assert.equal(f.nome, "Pagamento de fatura"); assert.equal(f.total_com_cartoes_no_periodo, 0); assert.equal(f.parcial_no_periodo, 250);
+  assert.equal(r.compras_por_cartao_no_periodo[0].cartao, "Nubank"); assert.equal(r.compras_por_cartao_no_periodo[0].total, 300);
+});
+
 t("categorias: com mês escolhido, o fim do período corta o mês seguinte", () => {
   const r = montarCategorias({ lancamentos: [...lancs, L({ valor: 999, data: "2026-11-02" })], categorias, inicioMesISO: "2026-10-01", fimExclusivoISO: "2026-11-01" });
   assert.equal(r.categorias_de_gasto.find((c) => c.nome === "Mercado").gasto_no_periodo, 100);
