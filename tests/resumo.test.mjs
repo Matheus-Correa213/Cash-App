@@ -108,4 +108,26 @@ t("saldosPorConta: transferência soma no destino e tira da origem; conta exclu�
   assert.equal(s.a, 59.5);
   assert.equal(s.b, 50.5);
 });
+
+// ---- Relatórios (20/10/2026): visão Total (com cartões) x Parcial (contas e carteiras) ----
+import { gastosPorCategoria, gastosPorCartao } from "../src/relatorioCalculo.js";
+t("relatórios: Total = conta (sem fatura) + compras no cartão; Parcial = tudo que saiu de conta", () => {
+  const lan = [
+    { tipo: "gasto", categoria: "dia_a_dia", valor: 100 },
+    { tipo: "gasto", categoria: "dia_a_dia", valor: 50, cartao_id: "c1" },
+    { tipo: "gasto", categoria: "outro", valor: 30, cartao_id: "c1" },
+    { tipo: "gasto", categoria: "fatura_cartao", valor: 200 },
+    { tipo: "gasto", categoria: "fatura_cartao", valor: -200, cartao_id: "c1" },
+    { tipo: "receita", categoria: "trabalho", valor: 999 },
+  ];
+  const r = gastosPorCategoria(lan);
+  assert.equal(r.parcialTotal, 300);
+  assert.equal(r.totalTotal, 180);
+  assert.equal(r.cartaoTotal, 80);
+  const dia = r.linhas.find((l) => l.chave === "dia_a_dia");
+  assert.equal(dia.total, 150); assert.equal(dia.parcial, 100);
+  assert.equal(r.linhas.find((l) => l.chave === "fatura_cartao").total, 0);
+  const c = gastosPorCartao(lan);
+  assert.equal(c.c1.total, 80); assert.equal(c.c1.qtd, 2);
+});
 console.log(ok + " testes passaram");

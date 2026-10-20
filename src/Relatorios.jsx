@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "./supabaseClient.js";
-import { C } from "./theme.js";
+import { C, SEM_CATEGORIA } from "./theme.js";
+import { gastosPorCategoria, gastosPorCartao, CHAVE_FATURA } from "./relatorioCalculo.js";
 
 const cardStyle = { background: C.card, border: `1px solid ${C.line}`, borderRadius: 14, padding: 18, marginBottom: 16 };
 const h2 = { fontSize: 14, fontWeight: 700, color: C.ink, marginBottom: 12, letterSpacing: "0.02em" };
@@ -13,7 +14,7 @@ const statLabel = { fontSize: 12, color: C.inkFaint, textTransform: "uppercase",
 const statBig = { fontSize: 22, fontWeight: 700, color: C.ink };
 
 function moeda(v) { return `R$ ${Number(v || 0).toFixed(2).replace(".", ",")}`; }
-function mesAtualStr() { return new Date().toISOString().slice(0, 7); } // "YYYY-MM"
+function mesAtualStr() { return new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }).slice(0, 7); } // "YYYY-MM" (horário de Brasília)
 function primeiroDiaDoMes(mesStr) { return `${mesStr}-01`; }
 function primeiroDiaProximoMes(mesStr) {
   const [ano, mes] = mesStr.split("-").map(Number);
@@ -23,6 +24,7 @@ function primeiroDiaProximoMes(mesStr) {
 
 const ABAS = [
   ["categorias", "Categorias"],
+  ["cartoes", "Cartões"],
   ["entradas-saidas", "Entradas x Saídas"],
   ["contas", "Contas"],
   ["tags", "Tags"],
@@ -55,6 +57,7 @@ export default function Relatorios({ familiaId, frentesGasto, onVoltar }) {
       )}
 
       {aba === "categorias" && <RelatorioCategorias familiaId={familiaId} mes={mes} frentesGasto={frentesGasto} />}
+      {aba === "cartoes" && <RelatorioCartoes familiaId={familiaId} mes={mes} frentesGasto={frentesGasto} />}
       {aba === "entradas-saidas" && <RelatorioEntradasSaidas familiaId={familiaId} mes={mes} />}
       {aba === "contas" && <RelatorioContas familiaId={familiaId} />}
       {aba === "tags" && <RelatorioTags familiaId={familiaId} />}
@@ -91,35 +94,156 @@ function useLancamentosDoMes(familiaId, mes) {
   return { lancamentos, carregando, erro };
 }
 
+// Aparência de uma categoria (cor + ícone/emoji), igual ao resto do app. As duas
+// chaves "especiais" não existem na tabela de categorias: o pagamento de fatura
+// (dinheiro que saiu de conta pra quitar o cartão) e o marcador do COSMO.
+function infoCategoria(chave, frentesGasto) {
+  if (chave === CHAVE_FATURA) return { chave, label: "Pagamento de fatura", cor: "#8A93A6", corTexto: "#5C6475", corSoft: "#EEF0F6", emoji: "💳", Icone: null };
+  if (chave === SEM_CATEGORIA) return { chave, label: "Categorizando…", cor: "#8A05BE", corTexto: "#8A05BE", corSoft: "#FDF3FF", emoji: "🤖", Icone: null };
+  return frentesGasto?.find((f) => f.chave === chave) || { chave, label: chave, cor: C.inkMute, corTexto: C.inkMute, corSoft: C.line, emoji: null, Icone: null };
+}
+
+function Selo({ f, tamanho = 34 }) {
+  const Icone = f.Icone;
+  return (
+    <div style={{ width: tamanho, height: tamanho, borderRadius: Math.round(tamanho * 0.3), background: f.cor, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+      {f.emoji ? <span style={{ fontSize: Math.round(tamanho * 0.47), lineHeight: 1 }}>{f.emoji}</span> : (Icone && <Icone size={Math.round(tamanho * 0.47)} color="#fff" strokeWidth={2} />)}
+    </div>
+  );
+}
+
+function Barra({ pct, cor }) {
+  return (
+    <div style={{ height: 6, borderRadius: 100, background: C.line, marginTop: 6 }}>
+      <div style={{ width: `${Math.max(2, Math.min(100, pct))}%`, height: "100%", borderRadius: 100, background: cor }} />
+    </div>
+  );
+}
+
 function RelatorioCategorias({ familiaId, mes, frentesGasto }) {
   const { lancamentos, carregando, erro } = useLancamentosDoMes(familiaId, mes);
-  const porCategoria = useMemo(() => {
-    const m = {};
-    for (const l of lancamentos) if (l.tipo === "gasto") m[l.categoria] = (m[l.categoria] || 0) + Number(l.valor);
-    return Object.entries(m).sort((a, b) => b[1] - a[1]);
-  }, [lancamentos]);
-  const total = porCategoria.reduce((s, [, v]) => s + v, 0);
-  // Migração 10 (categorias personalizadas, 16/09/2026): antes mostrava a
-  // CHAVE crua (ex: "dia_a_dia") — com `frentesGasto` (fixas + criadas pela
-  // família) dá pra mostrar o rótulo de verdade, igual no resto do app.
-  function rotuloDe(chave) {
-    return frentesGasto?.find((f) => f.chave === chave)?.label || chave;
-  }
+  const [visao, setVisao] = useState("total"); // "total" (com cartões) | "parcial" (só contas e carteiras)
+  const calc = useMemo(() => gastosPorCategoria(lancamentos), [lancamentos]);
+  const linhas = useMemo(() => calc.linhas.filter((l) => l[visao] > 0).sort((a, b) => b[visao] - a[visao]), [calc, visao]);
+  const totalVisao = visao === "total" ? calc.totalTotal : calc.parcialTotal;
+  const maior = linhas.length ? linhas[0][visao] : 0;
 
   if (carregando) return <div style={cardStyle}>Carregando…</div>;
   return (
-    <div style={cardStyle}>
-      {erro && <div style={{ color: C.danger, marginBottom: 10 }}>{erro}</div>}
-      <div style={h2}>GASTOS POR CATEGORIA</div>
-      {porCategoria.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhum gasto neste mês.</div>}
-      {porCategoria.map(([cat, val]) => (
-        <div key={cat} style={lineItem}>
-          <span style={{ fontSize: 14, color: C.ink }}>{rotuloDe(cat)}</span>
-          <span style={{ fontSize: 14, color: C.ink }}>
-            <b>{moeda(val)}</b> <span style={{ color: C.inkFaint, fontSize: 12 }}>({total > 0 ? ((val / total) * 100).toFixed(0) : 0}%)</span>
-          </span>
+    <div>
+      {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
+      <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+        {[["total", "Total · com cartões"], ["parcial", "Parcial · contas e carteiras"]].map(([v, l]) => (
+          <button key={v} onClick={() => setVisao(v)} style={{ ...(visao === v ? btn : btnGhost), flex: 1, padding: "9px 6px", fontSize: 12.5 }}>{l}</button>
+        ))}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={statLabel}>{visao === "total" ? "Gasto total do mês" : "Saiu das contas e carteiras"}</div>
+        <div style={{ ...statBig, marginTop: 2 }}>{moeda(totalVisao)}</div>
+        <div style={{ fontSize: 12.5, color: C.inkMute, marginTop: 6, lineHeight: 1.5 }}>
+          {visao === "total"
+            ? <>Contas e carteiras <b>{moeda(calc.contaSemFatura)}</b> + compras no cartão <b>{moeda(calc.cartaoTotal)}</b>. O pagamento de fatura não entra aqui (a compra já foi contada).</>
+            : <>Só o dinheiro que saiu de conta/carteira{calc.faturasPagas > 0 ? <>, incluindo <b>{moeda(calc.faturasPagas)}</b> de pagamento de fatura</> : null}. Compras no cartão: <b>{moeda(calc.cartaoTotal)}</b> (só aparecem em Total).</>}
         </div>
-      ))}
+      </div>
+
+      <div style={cardStyle}>
+        <div style={h2}>GASTOS POR CATEGORIA</div>
+        {linhas.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhum gasto neste mês.</div>}
+        {linhas.map((l, idx) => {
+          const f = infoCategoria(l.chave, frentesGasto);
+          const val = l[visao];
+          const detalhe = [l.conta > 0 && `conta ${moeda(l.conta)}`, l.cartao > 0 && visao === "total" && `cartão ${moeda(l.cartao)}`].filter(Boolean).join(" · ");
+          return (
+            <div key={l.chave} style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 0", borderBottom: idx === linhas.length - 1 ? "none" : `1px solid ${C.line}` }}>
+              <Selo f={f} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 13.5, fontWeight: 700, color: C.ink }}>{f.label}</span>
+                  <span style={{ fontSize: 13.5, color: C.ink }}><b>{moeda(val)}</b> <span style={{ color: C.inkFaint, fontSize: 11.5 }}>{totalVisao > 0 ? Math.round((val / totalVisao) * 100) : 0}%</span></span>
+                </div>
+                <Barra pct={maior > 0 ? (val / maior) * 100 : 0} cor={f.cor} />
+                {detalhe && <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>{detalhe}</div>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Custo dos cartões no mês: o que foi COMPRADO em cada cartão (pela data da compra),
+// quebrado por categoria. Não é a fatura (a fatura fecha em outro dia e desconta
+// pagamentos antecipados) — é o quanto o cartão custou de consumo no mês.
+function RelatorioCartoes({ familiaId, mes, frentesGasto }) {
+  const { lancamentos, carregando, erro } = useLancamentosDoMes(familiaId, mes);
+  const [cartoes, setCartoes] = useState([]);
+  const [aberto, setAberto] = useState(null);
+  useEffect(() => {
+    let cancelado = false;
+    supabase.from("cartoes_credito").select("id, nome").eq("familia_id", familiaId).order("nome")
+      .then(({ data }) => { if (!cancelado) setCartoes(data || []); });
+    return () => { cancelado = true; };
+  }, [familiaId]);
+
+  const porCartao = useMemo(() => gastosPorCartao(lancamentos), [lancamentos]);
+  const lista = useMemo(() => {
+    const nome = Object.fromEntries(cartoes.map((c) => [c.id, c.nome]));
+    return Object.entries(porCartao).map(([id, x]) => ({ id, nome: nome[id] || "Cartão", ...x })).sort((a, b) => b.total - a.total);
+  }, [porCartao, cartoes]);
+  const totalGeral = lista.reduce((s, c) => s + c.total, 0);
+  const maior = lista.length ? lista[0].total : 0;
+
+  if (carregando) return <div style={cardStyle}>Carregando…</div>;
+  return (
+    <div>
+      {erro && <div style={{ ...cardStyle, color: C.danger }}>{erro}</div>}
+      <div style={cardStyle}>
+        <div style={statLabel}>Comprado nos cartões no mês</div>
+        <div style={{ ...statBig, marginTop: 2 }}>{moeda(totalGeral)}</div>
+        <div style={{ fontSize: 12.5, color: C.inkMute, marginTop: 6, lineHeight: 1.5 }}>Pela data da compra. Pagamentos antecipados, estornos e pagamento de fatura não entram.</div>
+      </div>
+      <div style={cardStyle}>
+        <div style={h2}>POR CARTÃO</div>
+        {lista.length === 0 && <div style={{ color: C.inkFaint, fontSize: 13.5 }}>Nenhuma compra no cartão neste mês.</div>}
+        {lista.map((c, idx) => {
+          const cats = Object.entries(c.porCategoria).sort((a, b) => b[1] - a[1]);
+          const abertoAqui = aberto === c.id;
+          return (
+            <div key={c.id} style={{ borderBottom: idx === lista.length - 1 ? "none" : `1px solid ${C.line}`, padding: "11px 0" }}>
+              <div onClick={() => setAberto(abertoAqui ? null : c.id)} style={{ cursor: "pointer" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: C.ink }}>💳 {c.nome}</span>
+                  <span style={{ fontSize: 14, color: C.ink }}><b>{moeda(c.total)}</b> <span style={{ color: C.inkFaint, fontSize: 11.5 }}>{totalGeral > 0 ? Math.round((c.total / totalGeral) * 100) : 0}%</span></span>
+                </div>
+                <Barra pct={maior > 0 ? (c.total / maior) * 100 : 0} cor={C.accent} />
+                <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>{c.qtd} {c.qtd === 1 ? "compra" : "compras"} · toque para {abertoAqui ? "recolher" : "ver por categoria"}</div>
+              </div>
+              {abertoAqui && (
+                <div style={{ marginTop: 8 }}>
+                  {cats.map(([chave, val]) => {
+                    const f = infoCategoria(chave, frentesGasto);
+                    return (
+                      <div key={chave} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0" }}>
+                        <Selo f={f} tamanho={28} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: "flex", justifyContent: "space-between", gap: 8, fontSize: 13, color: C.ink }}>
+                            <span style={{ fontWeight: 600 }}>{f.label}</span>
+                            <span><b>{moeda(val)}</b> <span style={{ color: C.inkFaint, fontSize: 11 }}>{Math.round((val / c.total) * 100)}%</span></span>
+                          </div>
+                          <Barra pct={(val / cats[0][1]) * 100} cor={f.cor} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
