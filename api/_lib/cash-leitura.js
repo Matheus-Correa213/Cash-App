@@ -59,7 +59,7 @@ export function montarLancamentos({ lancamentos = [], membros = [], contas = [],
   let saida = 0, receitas = 0, cartao = 0;
   for (const l of achados) {
     const v = Number(l.valor) || 0;
-    if (l.tipo === "receita") receitas += v; else if (l.cartao_id) cartao += v; else saida += v;
+    if (l.tipo === "receita") receitas += v; else if (l.cartao_id) { if (v > 0) cartao += v; /* negativo = pagamento antecipado/estorno */ } else saida += v;
   }
   const mostrar = achados.slice(0, f.limite || 40);
   return {
@@ -88,7 +88,7 @@ export function montarCategorias({ lancamentos = [], categorias = [], inicioMesI
     const v = Number(l.valor) || 0;
     const a = (acum[l.tipo] ||= {});
     const x = (a[l.categoria] ||= { total: 0, cartao: 0 });
-    if (l.tipo === "gasto" && l.cartao_id) x.cartao += v; else x.total += v;
+    if (l.tipo === "gasto" && l.cartao_id) { if (v > 0) x.cartao += v; } else x.total += v;
   }
   const monta = (tipo) => {
     const conhecidas = categorias.filter((c) => c.tipo === tipo);

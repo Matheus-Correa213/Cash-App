@@ -37,6 +37,10 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
   // ser o ponto de partida sempre que o cartão muda.
   const [mesEscolhido, setMesEscolhido] = useState(null);
   const [editandoLancamentoId, setEditandoLancamentoId] = useState(null);
+  // Antecipar pagamento / estorno (migração 19, 20/10/2026): "pagar" uma PARTE da
+  // fatura antes de fechar libera limite (o cartão do Mercado Pago é usado assim).
+  // null | "pagamento" | "estorno"
+  const [abrindoAntecipacao, setAbrindoAntecipacao] = useState(null);
 
   // `silencioso`: recarrega os dados SEM trocar a tela por "Carregando…" — senão
   // a tela de importação OFX (filha deste componente) desmontava no meio da
@@ -123,6 +127,21 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
   }, [lancamentosAbertos]);
   const totalParcelado = parcelamentos.reduce((s, p) => s + p.restante, 0);
 
+  // Desfaz um pagamento antecipado/estorno: apaga a linha negativa do cartão e,
+  // se saiu dinheiro de uma conta, a saída correspondente (mesmo antecipacao_id).
+  async function desfazerAntecipacao(l) {
+    if (!confirm(`Desfazer "${l.descricao || "pagamento"}" de ${moeda(Math.abs(l.valor))}? A fatura volta a ter esse valor e, se saiu de uma conta, o dinheiro volta pra ela.`)) return;
+    try {
+      const { data, error } = await supabase.from("lancamentos").delete().eq("antecipacao_id", l.antecipacao_id).select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("Não foi desfeito — o banco não confirmou (só o administrador pode).");
+      carregar({ silencioso: true });
+      onSalvo && onSalvo();
+    } catch (e) {
+      alert(e.message);
+    }
+  }
+
   async function pagarFaturaAtual() {
     if (!confirm(`Marcar a fatura de ${cartao.nome} (${moeda(totalFaturaAtiva)}) como paga?`)) return;
     try {
@@ -200,6 +219,22 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
         </div>
       )}
 
+      {podeEditar && !abrindoAntecipacao && (
+        <div style={{ display: "flex", gap: 10 }}>
+          <button onClick={() => setAbrindoAntecipacao("pagamento")} style={{ flex: 1, border: `1px solid ${inst.cor}`, background: "#fff", color: C.ink, borderRadius: 12, padding: "11px 0", fontSize: 13, fontWeight: 800, cursor: "pointer" }}>Antecipar pagamento</button>
+          <button onClick={() => setAbrindoAntecipacao("estorno")} style={{ flex: 1, border: `1px solid ${C.line}`, background: "#fff", color: C.inkMute, borderRadius: 12, padding: "11px 0", fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Estorno</button>
+        </div>
+      )}
+      {podeEditar && abrindoAntecipacao && (
+        <AntecipacaoForm
+          cartao={cartao} contas={contas} estorno={abrindoAntecipacao === "estorno"}
+          devido={lancamentosAbertos.reduce((s, l) => s + Number(l.valor), 0) + Number(cartao.fatura_inicial || 0)}
+          usado={usado}
+          onSalvo={() => { setAbrindoAntecipacao(null); carregar({ silencioso: true }); onSalvo && onSalvo(); }}
+          onCancelar={() => setAbrindoAntecipacao(null)}
+        />
+      )}
+
       <div>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <button
@@ -227,6 +262,22 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
                     onSalvo={() => { setEditandoLancamentoId(null); carregar(); onSalvo && onSalvo(); }}
                     onCancelar={() => setEditandoLancamentoId(null)}
                   />
+                </div>
+              );
+            }
+            // Linha NEGATIVA = pagamento antecipado ou estorno (não é compra): aparece
+            // em verde, igual ao extrato do banco, e só pode ser desfeita (não editada).
+            if (Number(l.valor) < 0) {
+              return (
+                <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: C.ink }}>{l.descricao || "Pagamento antecipado"}</div>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: C.inkFaint }}>{l.data}</div>
+                  </div>
+                  <span style={{ fontSize: 13.5, fontWeight: 800, color: C.greenTextAlt }}>− {moeda(Math.abs(l.valor))}</span>
+                  {podeEditar && l.antecipacao_id && (
+                    <button onClick={() => desfazerAntecipacao(l)} style={{ border: "none", background: "transparent", color: C.danger, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>desfazer</button>
+                  )}
                 </div>
               );
             }
@@ -282,6 +333,80 @@ export default function CartaoDetalhe({ cartaoId, familiaId, membro, membros, co
         </button>
       )}
     </div>
+  );
+}
+
+// Antecipar pagamento / estorno no cartão. O pagamento pode sair de uma conta (o
+// saldo dela cai) ou "de fora" (Pix de outro lugar, ou um valor que o saldo da
+// conta já desconta): nesse caso só a fatura e o limite mudam. Estorno nunca
+// mexe em conta nenhuma.
+function AntecipacaoForm({ cartao, contas, estorno, devido, usado, onSalvo, onCancelar }) {
+  const hoje = new Date();
+  const hojeISO = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(hoje.getDate()).padStart(2, "0")}`;
+  const [valor, setValor] = useState("");
+  const [data, setData] = useState(hojeISO);
+  const [contaId, setContaId] = useState(cartao.conta_pagamento_id || "");
+  const [descricao, setDescricao] = useState("");
+  const [salvando, setSalvando] = useState(false);
+  const [erro, setErro] = useState("");
+  const v = Number(valor) || 0;
+  const campo = { width: "100%", padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${C.line}`, fontSize: 14, background: "#fff", boxSizing: "border-box" };
+  const rotulo = { fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 4 };
+
+  async function salvar(e) {
+    e.preventDefault();
+    setErro("");
+    if (!(v > 0)) { setErro("Informe um valor maior que zero."); return; }
+    if (v > devido + 0.005) { setErro(`O cartão deve ${moeda(devido)} em aberto — o valor passa disso.`); return; }
+    setSalvando(true);
+    try {
+      const { error } = await supabase.rpc("antecipar_pagamento_cartao", {
+        p_cartao_id: cartao.id, p_valor: v, p_conta_id: estorno || !contaId ? null : contaId,
+        p_data: data, p_descricao: descricao.trim() || null, p_estorno: estorno,
+      });
+      if (error) throw error;
+      onSalvo();
+    } catch (e2) {
+      setErro(e2.message || "Erro ao salvar.");
+      setSalvando(false);
+    }
+  }
+
+  return (
+    <form onSubmit={salvar} style={{ background: C.card, borderRadius: 16, padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ fontSize: 14, fontWeight: 800, color: C.ink }}>{estorno ? "Estorno / reembolso" : "Antecipar pagamento"}</div>
+      {erro && <div style={{ color: C.danger, fontSize: 13 }}>{erro}</div>}
+      <div>
+        <div style={rotulo}>Valor</div>
+        <input type="number" step="0.01" min="0" inputMode="decimal" placeholder="0,00" value={valor} onChange={(e) => setValor(e.target.value)} style={{ ...campo, fontSize: 22, fontWeight: 800 }} />
+        {v > 0 && (
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.inkMute, marginTop: 6 }}>
+            Fatura em aberto: {moeda(devido)} → <b>{moeda(Math.max(0, devido - v))}</b>
+            {cartao.limite != null && <> · disponível: {moeda(Math.max(0, cartao.limite - usado))} → <b>{moeda(Math.max(0, cartao.limite - (usado - v)))}</b></>}
+          </div>
+        )}
+      </div>
+      {!estorno && (
+        <div>
+          <div style={rotulo}>Saiu de</div>
+          <select value={contaId} onChange={(e) => setContaId(e.target.value)} style={campo}>
+            <option value="">Não descontar de nenhuma conta</option>
+            {contas.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+          </select>
+          <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkFaint, marginTop: 4 }}>
+            {contaId ? "O saldo dessa conta diminui pelo valor pago." : "Só a fatura e o limite mudam; nenhum saldo é mexido."}
+          </div>
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input type="date" value={data} onChange={(e) => setData(e.target.value)} style={{ ...campo, flex: "1 1 140px", width: "auto" }} />
+        <input placeholder="Descrição (opcional)" value={descricao} onChange={(e) => setDescricao(e.target.value)} style={{ ...campo, flex: "2 1 180px", width: "auto" }} />
+      </div>
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="button" onClick={onCancelar} disabled={salvando} style={{ padding: "11px 16px", borderRadius: 10, border: `1px solid ${C.lineStrong}`, background: "transparent", color: C.inkMute, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Cancelar</button>
+        <button type="submit" disabled={salvando} style={{ flex: 1, padding: "11px 0", borderRadius: 10, border: "none", background: C.accent, color: "#fff", fontSize: 13.5, fontWeight: 800, cursor: "pointer" }}>{salvando ? "Salvando…" : "Confirmar"}</button>
+      </div>
+    </form>
   );
 }
 

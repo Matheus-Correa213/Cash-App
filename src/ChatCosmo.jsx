@@ -638,6 +638,26 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     return `Transferido ${moeda(valor)} de ${origem.nome} para ${destino.nome}`;
   }
 
+  // Pagamento antecipado / estorno no cartão (migração 19, 20/10/2026): chama a
+  // RPC do banco (só o administrador; confere o teto do que o cartão deve).
+  async function confirmarAntecipacaoCartao(dados) {
+    const cartao = encontrarAlvo(cartoes, { id_existente: dados.cartao_id, nome: dados.cartao_nome });
+    if (!cartao) throw new Error(`Não encontrei o cartão "${dados.cartao_nome || ""}" — confira o nome em Contas e cartões.`);
+    const valor = Number(dados.valor);
+    if (!(valor > 0)) throw new Error("O valor precisa ser maior que zero.");
+    const estorno = !!dados.estorno;
+    const conta = !estorno && (dados.conta_id || dados.conta_nome) ? encontrarAlvo(contas, { id_existente: dados.conta_id, nome: dados.conta_nome }) : null;
+    if (!estorno && (dados.conta_id || dados.conta_nome) && !conta) throw new Error(`Não encontrei a conta "${dados.conta_nome || ""}" — confira o nome em Contas e cartões.`);
+    const { error } = await supabase.rpc("antecipar_pagamento_cartao", {
+      p_cartao_id: cartao.id, p_valor: valor, p_conta_id: conta?.id || null,
+      p_data: dados.data || dataLocalISO(), p_descricao: dados.descricao || null, p_estorno: estorno,
+    });
+    if (error) throw error;
+    return estorno
+      ? `Estorno de ${moeda(valor)} lançado no cartão ${cartao.nome}`
+      : `Pagamento antecipado de ${moeda(valor)} no cartão ${cartao.nome}${conta ? ` (saiu de ${conta.nome})` : " (sem descontar de conta)"}`;
+  }
+
   // Devolve um texto descrevendo exatamente o que aconteceu (criou ou
   // atualizou o quê, com qual valor) — é esse texto que fica gravado em
   // `confirmadas` no lugar de um `true` genérico, pra quem olha o chat depois
@@ -649,6 +669,7 @@ export default function ChatCosmo({ membro, contas, cartoes, frentesGasto, fonte
     if (proposta.natureza === "categoria") return await confirmarCategoria(proposta.dados);
     if (proposta.natureza === "editar_lancamento") return await confirmarEditarLancamento(proposta.dados);
     if (proposta.natureza === "transferencia") return await confirmarTransferencia(proposta.dados);
+    if (proposta.natureza === "antecipacao_cartao") return await confirmarAntecipacaoCartao(proposta.dados);
     return await confirmarContaOuCartao(proposta.dados);
   }
 
@@ -808,6 +829,7 @@ function Bolha({ mensagem, frentesGasto, fontesReceita, onConfirmar, onConfirmar
             return <div key={idx} style={{ fontSize: 11.5, fontWeight: 700, color: C.greenTextAlt }}>✓ {texto}</div>;
           }
           if (proposta.natureza === "lancamento") return <CardProposta key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
+          if (proposta.natureza === "antecipacao_cartao") return <CardPropostaAntecipacao key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "transferencia") return <CardPropostaTransferencia key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "categoria") return <CardPropostaCategoria key={idx} dados={proposta.dados} onConfirmar={() => onConfirmar(idx, proposta)} />;
           if (proposta.natureza === "editar_lancamento") return <CardPropostaEditarLancamento key={idx} dados={proposta.dados} frentesGasto={frentesGasto} fontesReceita={fontesReceita} onConfirmar={() => onConfirmar(idx, proposta)} />;
@@ -924,6 +946,28 @@ function CardPropostaEditarLancamento({ dados, frentesGasto, fontesReceita, onCo
       {dados.descricao && <Linha label="Lançamento" valor={dados.descricao} />}
       <Linha label="De" valor={rotulo(dados.categoria_atual)} />
       <Linha label="Para" valor={rotulo(dados.categoria_nova)} />
+      <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+        <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar</button>
+      </div>
+    </div>
+  );
+}
+
+// Pagamento antecipado / estorno no cartão (migração 19).
+function CardPropostaAntecipacao({ dados, onConfirmar }) {
+  const estorno = !!dados.estorno;
+  return (
+    <div style={{ background: "#fff", border: `1.5px solid ${C.accentSoft}`, borderRadius: 16, padding: 14, display: "flex", flexDirection: "column", gap: 8 }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.inkFaint, textTransform: "uppercase" }}>{estorno ? "Estorno no cartão" : "Antecipar fatura"}</span>
+        <span style={{ fontSize: 16, fontWeight: 800, color: C.greenTextAlt }}>− {moeda(dados.valor)}</span>
+      </div>
+      <div style={{ height: 1, background: C.line }} />
+      <Linha label="Cartão" valor={dados.cartao_nome || "?"} />
+      {!estorno && <Linha label="Saiu de" valor={dados.conta_nome || "nenhuma conta (saldo não muda)"} />}
+      {dados.data && <Linha label="Data" valor={dados.data} />}
+      {dados.descricao && <Linha label="Observação" valor={dados.descricao} />}
+      <div style={{ fontSize: 11.5, fontWeight: 600, color: C.inkMute }}>Reduz a fatura e libera limite.</div>
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <button onClick={onConfirmar} style={{ flex: 1, background: C.accent, borderRadius: 10, border: "none", padding: "9px 0", color: "#fff", fontSize: 12, fontWeight: 800, cursor: "pointer" }}>Confirmar</button>
       </div>

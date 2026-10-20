@@ -99,6 +99,24 @@ function montarFerramentas(categoriasResumo) {
     },
   },
   {
+    name: "propor_antecipacao_cartao",
+    description: "Monta uma PROPOSTA de pagamento ANTECIPADO (parcial) da fatura de um cartão de crédito, ou de ESTORNO/reembolso no cartão. Pagar uma parte da fatura antes do fechamento reduz a fatura e LIBERA LIMITE (ex: o cartão Mercado Pago tem limite de 500 e é usado assim). Use quando o usuário disser que antecipou/adiantou/pagou parte da fatura, 'liberou limite', ou que recebeu um estorno/reembolso no cartão. NÃO use pra pagar a fatura inteira no vencimento (isso é a tela do cartão) nem pra transferência entre contas. Não grava nada — só propõe, a pessoa confirma na tela.",
+    input_schema: {
+      type: "object",
+      properties: {
+        cartao_id: { type: "string", description: "O id EXATO ([id: ...] da lista de cartões) do cartão." },
+        cartao_nome: { type: "string", description: "Nome do cartão (exibição)." },
+        valor: { type: "number", description: "Valor pago/estornado, positivo." },
+        estorno: { type: "boolean", description: "true se for estorno/reembolso (nenhum dinheiro sai de conta). false/omitido se for pagamento antecipado." },
+        conta_id: { type: "string", description: "Só pra pagamento: o id EXATO ([id: ...] da lista de contas) da conta de onde o dinheiro saiu. Deixe vazio se o usuário não disse ou se não saiu de nenhuma conta dele." },
+        conta_nome: { type: "string", description: "Nome da conta de onde saiu (exibição)." },
+        data: { type: "string", description: "Data no formato YYYY-MM-DD. Se não souber, use a data de hoje." },
+        descricao: { type: "string", description: "Observação curta opcional." },
+      },
+      required: ["cartao_nome", "valor"],
+    },
+  },
+  {
     name: "propor_categoria",
     description: "Monta uma PROPOSTA pra criar, editar ou excluir uma categoria (frente de gasto ou fonte de receita) — use quando o usuário pedir pra criar uma categoria nova, renomear/trocar cor ou emoji de uma que já existe, ou excluir uma. Isso vale pra QUALQUER categoria, inclusive as da doutrina financeira do COSMO (dia_a_dia, recorrentes, reserva, projetos, casa_familia, saude, trabalho, correa_books, freelas, outros) — elas não são mais fixas, também podem ser editadas ou excluídas. Não grava nada — só propõe, a pessoa confirma na tela.",
     input_schema: {
@@ -202,6 +220,7 @@ Regras importantes:
 - Se o usuário descrever uma compra, pagamento, PIX recebido, ou mandar uma foto de comprovante: chame propor_lancamento com os dados que conseguir extrair. Se ele mencionar com qual conta ou cartão pagou (ou for óbvio pelo contexto), inclua também o pago_com_id copiado da lista de contas/cartões acima — sem isso, o app pode não conseguir identificar a conta/cartão certo só pelo nome, e o lançamento fica sem tirar de lugar nenhum. Nunca diga que "já lançou" — apenas proponha.
 - Se o usuário disser que passou/transferiu/sacou/depositou dinheiro ENTRE DUAS contas/carteiras dele (ex: "passei 500 do Nubank pro Inter", "saquei 200 do banco pra carteira"): chame propor_transferencia com origem_id e destino_id copiados da lista de contas acima — NUNCA propor_lancamento pra isso (transferência não é gasto nem receita). Se ele mandar várias transferências, chame a ferramenta uma vez para cada, em paralelo. Pagar fatura de cartão e enviar dinheiro a outra pessoa NÃO são transferências entre contas dele.
 - O usuário pode anexar VÁRIOS arquivos de uma vez: fotos, PDFs (extratos, comprovantes, faturas), documentos Word, texto ou CSV. Leia todos. Se um arquivo tiver um lançamento (um comprovante), proponha-o; se tiver vários (extrato, fatura), chame propor_lancamento uma vez por lançamento, em paralelo — mas, passando de uns 15 lançamentos, proponha só os primeiros e diga pra usar "Importar e anexar" (em Mais) pra o resto. Se algum arquivo não puder ser lido (veja o aviso no fim da mensagem do usuário, se houver), diga isso em uma frase. Se ele só mandou o arquivo sem texto, descreva em uma frase o que viu e proponha o que fizer sentido.
+- Se o usuário disser que antecipou/adiantou parte da fatura de um cartão (pra liberar limite), ou que teve estorno/reembolso no cartão: chame propor_antecipacao_cartao com cartao_id copiado da lista de cartões e, se foi pagamento e ele disser de qual conta saiu, conta_id copiado da lista de contas. Isso REDUZ a fatura e libera limite; não é um gasto novo. Se a pessoa não disser de qual conta saiu, deixe conta_id vazio e avise que nenhum saldo será descontado.
 - Se o usuário pedir pra criar, renomear, trocar cor/emoji, ou excluir uma categoria: chame propor_categoria. Isso vale pra QUALQUER categoria — as 10 da doutrina financeira listadas acima não são fixas, também podem ser editadas ou excluídas, por você ou pela pessoa direto na tela "Categorias". Pra editar/excluir uma que já existe, sempre inclua chave_existente copiada EXATAMENTE da lista de categorias acima (é assim que o app acha o registro certo — não é por nome).
 - Se o usuário informar saldos de contas/carteiras, um cartão novo, ou mudanças em limite/fatura/dados de uma conta ou cartão (olhe a lista acima pra saber se já existe): chame propor_conta_ou_cartao. Se vier mais de uma conta/cartão na mesma mensagem, chame a ferramenta várias vezes em paralelo, uma por conta/cartão — nunca junte várias contas numa proposta só. NUNCA pule nenhum item da lista que o usuário mandou, mesmo que sejam 5, 10 ou mais — cada conta/cartão mencionado vira uma chamada de ferramenta própria.
 - Ao decidir 'criar_conta/cartao' vs 'atualizar_conta/cartao', compare com a lista acima (por nome, mesmo que o usuário não escreva exatamente igual — "Nubank" no texto do usuário deve casar com "Nubank Croma" da lista, por exemplo) — se já existe algo parecido, use 'atualizar_*' e SEMPRE inclua id_existente copiado EXATAMENTE do campo [id: ...] correspondente da lista acima (é assim que o app encontra o registro certo — não é feito por nome). Só use 'criar_*' quando realmente não existir nada parecido na lista.
@@ -345,8 +364,8 @@ export default async function handler(req, res) {
 
   const systemPrompt = montarSystemPrompt(contasResumo, cartoesResumo, categoriasResumo, hoje);
   const ferramentas = montarFerramentas(categoriasResumo);
-  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento", "propor_transferencia"]);
-  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento", propor_transferencia: "transferencia" };
+  const NOMES_FERRAMENTAS_PROPOSTA = new Set(["propor_lancamento", "propor_conta_ou_cartao", "propor_categoria", "propor_editar_lancamento", "propor_transferencia", "propor_antecipacao_cartao"]);
+  const NATUREZA_POR_FERRAMENTA = { propor_lancamento: "lancamento", propor_conta_ou_cartao: "conta_ou_cartao", propor_categoria: "categoria", propor_editar_lancamento: "editar_lancamento", propor_transferencia: "transferencia", propor_antecipacao_cartao: "antecipacao_cartao" };
 
   try {
     let propostas = [];

@@ -44,7 +44,7 @@ export function calcularResumo({ lancamentos = [], membros = [], contas = [], ca
   for (const l of doMes) {
     const valor = Number(l.valor) || 0;
     if (l.tipo === "gasto") {
-      if (l.cartao_id) { comprasNoCartao += valor; continue; } // vira gasto quando a fatura é paga
+      if (l.cartao_id) { if (valor > 0) comprasNoCartao += valor; continue; } // vira gasto quando a fatura é paga (linha negativa = pagamento antecipado/estorno, não é compra)
       totalGastos += valor;
       const cat = nomeCategoria(l.categoria);
       porCategoria[cat] = (porCategoria[cat] || 0) + valor;
