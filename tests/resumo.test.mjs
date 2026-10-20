@@ -110,7 +110,7 @@ t("saldosPorConta: transferência soma no destino e tira da origem; conta exclu�
 });
 
 // ---- Relatórios (20/10/2026): visão Total (com cartões) x Parcial (contas e carteiras) ----
-import { gastosPorCategoria, gastosPorCartao } from "../src/relatorioCalculo.js";
+import { gastosPorCategoria, gastosPorCartao } from "../api/_lib/relatorio-calculo.js";
 t("relatórios: Total = conta (sem fatura) + compras no cartão; Parcial = tudo que saiu de conta", () => {
   const lan = [
     { tipo: "gasto", categoria: "dia_a_dia", valor: 100 },

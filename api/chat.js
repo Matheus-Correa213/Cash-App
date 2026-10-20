@@ -20,6 +20,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { lerAnexos } from "./_lib/anexos-leitura.js";
+import { gastosPorCategoria, gastosPorCartao } from "./_lib/relatorio-calculo.js";
 
 const MODELO = "claude-sonnet-4-6";
 
@@ -227,6 +228,8 @@ Regras importantes:
 - Sobre cartão de crédito: se o usuário mandar "limite total", "limite disponível" e "fatura atual" juntos, use limite pro limite total, fatura_atual pro valor da fatura, e limite_disponivel pro valor disponível — os três são úteis e devem ser incluídos quando informados. NÃO assuma que "disponível" é sempre igual a "limite menos fatura atual": quando o usuário tem compras parceladas em andamento, o disponível real é menor do que essa conta simples, porque o limite já foi consumido pelas parcelas futuras mesmo elas ainda não aparecendo na fatura — é exatamente por isso que limite_disponivel existe como campo próprio, pra o app calcular essa diferença.
 - Cartão de crédito não é uma conta de subtração simples: uma compra parcelada (ex: "comprei um item de 6000 em 10x") consome o LIMITE inteiro na hora da compra, mas só uma parcela entra na fatura de cada mês. Isso ainda não pode ser lançado pelo chat — só pela tela "Novo lançamento" no app, que já sabe dividir e espalhar as parcelas certas pelos meses. Se o usuário descrever uma compra parcelada, não use propor_lancamento nem fatura_atual pra isso — explique que esse tipo de lançamento precisa ser feito em "Novo lançamento" no app.
 - Se o usuário perguntar algo sobre os próprios números (quanto gastou, como está o orçamento, etc): chame resumo_periodo primeiro, depois responda com base no resultado real.
+- Ao falar de gasto, deixe claro qual visão usa: TOTAL (custo real, com as compras no cartão) ou PARCIAL (só o que saiu de conta/carteira) — são os mesmos dois botões da tela Relatórios. Nunca some total com parcial nem some pagamento de fatura com compras do cartão.
+- Se o usuário pedir uma VISÃO DE GESTÃO ("como melhorar", "onde estou errando", "pra onde vai meu dinheiro"): chame resumo_periodo (30 dias e, se couber, 60) e situacao_financeira_agora na mesma rodada e responda só com os números que vierem: 1) as 3 categorias que mais pesam no TOTAL e o quanto de cada uma passa pelo cartão; 2) quanto do gasto está indo pro cartão (compras_no_cartao ÷ total) e se a fatura aberta cabe no saldo; 3) o que mais mudou ou chama atenção (categoria concentrada, categoria genérica como "Outro" grande demais, categorias sem lançamento); 4) no máximo duas ações concretas, com valor. Se o dado não permite concluir (período curto, poucos lançamentos), diga isso em vez de inventar. Texto simples, sem markdown.
 - Se o usuário quiser reorganizar/revisar lançamentos que já foram feitos — por exemplo, separar compras de "mercado" e "combustível" que hoje estão misturadas dentro de "Dia a dia" — chame listar_lancamentos filtrando pela categoria genérica (não peça isso de cara em toda pergunta, só quando for realmente necessário ver a descrição individual de cada lançamento). Depois de ver a lista, decida a categoria nova de cada um pela descrição e chame propor_editar_lancamento uma vez pra CADA lançamento que deve mudar, em paralelo (mesma lógica de propor_conta_ou_cartao) — nunca invente ou edite um lançamento que você não viu na lista.
 - Se o usuário perguntar como ficam os OUTROS MESES, se vai gastar mais ou menos, a diferença entre meses, quando alivia ou o que muda daqui pra frente: chame comparar_meses e responda só com os números dela. Diga o total de cada mês relevante (ou do mês perguntado), a diferença pro mês anterior e, principalmente, POR QUE mudou (qual parcela/fatura acabou, qual boleto entrou ou saiu, o que mudou de valor) usando entrou_neste_mes, saiu_neste_mes e mudou_de_valor. Lembre que as faturas dos meses de frente só incluem o que já está lançado no cartão, então podem subir com novas compras, e que boletos aproximados ou sem valor definido deixam o total incerto — diga quais. Se a pessoa quiser os boletos recorrentes, use boletos_recorrentes e planejamento_do_mes. Texto simples, sem markdown, curto: no máximo uns 6 meses em lista (mês · total · diferença) e depois a explicação.
 - Se o usuário pedir ESTRATÉGIA DE PAGAMENTO (em que ordem pagar, o que priorizar, se o saldo cobre, o que fazer se não cobrir): chame planejamento_do_mes E situacao_financeira_agora, as duas na mesma rodada, e raciocine só com os números que elas devolverem. Considere apenas itens NÃO pagos. Itens com vencido_de_mes_anterior true (venceram num mês anterior, data completa em data_vencimento) são a PRIORIDADE MÁXIMA: vêm primeiro, do mais antigo pro mais novo, e você diz que já estão vencidos. Depois ordene por dia de vencimento; no mês atual, o que tem dia anterior a hoje já está ATRASADO e vem logo em seguida. Itens SEM dia_vencimento são coisas pessoais, sem data de verdade: trate como flexíveis — vão por último, só se sobrar saldo, e nunca como atrasados. Compare a soma acumulada do que vence com o saldo das contas e diga em que data o saldo deixa de cobrir e quanto falta. Valores marcados como aproximados são estimativa — avise. As faturas dos cartões já aparecem no planejamento como itens com origem "fatura_cartao" (valor atual, vencimento e, se ainda_recebendo_compras for true, o valor ainda pode subir até o fechamento — avise isso): use esses itens e NÃO some de novo as faturas que vêm de situacao_financeira_agora (use aquela ferramenta pro saldo das contas e pra ver faturas de outros meses). Se algum outro item do planejamento parecer ser a mesma fatura/parcela de um cartão, diga a dúvida em vez de somar duas vezes. Você não sabe quando entra dinheiro novo (salário etc.): não invente, e se faltar saldo pergunte se há entrada prevista antes da data crítica. Formato: ordem sugerida em lista curta (data · item · valor), depois o ponto de atenção, e no máximo uma pergunta. Escreva em texto simples (o chat não formata markdown: nada de ** ou #; use traços e quebras de linha). Você não paga nem marca nada — só orienta.
@@ -263,14 +266,37 @@ export default async function handler(req, res) {
     if (nome === "resumo_periodo") {
       const dias = entrada.dias || 30;
       const desde = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-      let query = supabase.from("lancamentos").select("tipo, categoria, valor, data").gte("data", desde);
+      let query = supabase.from("lancamentos").select("tipo, categoria, valor, data, cartao_id").gte("data", desde);
       if (entrada.categoria) query = query.eq("categoria", entrada.categoria);
       if (entrada.tipo && entrada.tipo !== "ambos") query = query.eq("tipo", entrada.tipo);
-      const { data, error } = await query;
+      const [{ data, error }, { data: cats }, { data: cartoes }] = await Promise.all([
+        query,
+        supabase.from("categorias").select("chave, label, tipo").eq("tipo", "gasto"),
+        supabase.from("cartoes_credito").select("id, nome"),
+      ]);
       if (error) return { erro: error.message };
-      const totalGasto = (data || []).filter((l) => l.tipo === "gasto").reduce((s, l) => s + Number(l.valor), 0);
-      const totalReceita = (data || []).filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0);
-      return { periodo_dias: dias, total_gasto: totalGasto, total_receita: totalReceita, quantidade_lancamentos: (data || []).length };
+      const lan = data || [];
+      // Mesma conta da tela Relatórios (api/_lib/relatorio-calculo.js): TOTAL = contas (sem pagamento de
+      // fatura) + compras no cartão; PARCIAL = só o que saiu de conta/carteira. Somar tudo junto contaria
+      // duas vezes o que foi comprado no cartão e depois pago na fatura.
+      const calc = gastosPorCategoria(lan);
+      const rotulo = Object.fromEntries((cats || []).map((c) => [c.chave, c.label]));
+      rotulo.fatura_cartao = "Pagamento de fatura (só no parcial)";
+      const nomeCartao = Object.fromEntries((cartoes || []).map((c) => [c.id, c.nome]));
+      const porCartao = gastosPorCartao(lan);
+      const totalReceita = lan.filter((l) => l.tipo === "receita").reduce((s, l) => s + Number(l.valor), 0);
+      return {
+        periodo_dias: dias,
+        total_gasto_com_cartoes: calc.totalTotal,
+        parcial_saiu_de_contas_e_carteiras: calc.parcialTotal,
+        compras_no_cartao: calc.cartaoTotal,
+        pagamento_de_fatura_dentro_do_parcial: calc.faturasPagas,
+        total_receita: totalReceita,
+        quantidade_lancamentos: lan.length,
+        gastos_por_categoria: calc.linhas.map((l) => ({ categoria: rotulo[l.chave] || l.chave, total: l.total, parcial: l.parcial, no_cartao: l.cartao })).sort((a, b) => b.total - a.total || b.parcial - a.parcial),
+        compras_por_cartao: Object.entries(porCartao).map(([id, x]) => ({ cartao: nomeCartao[id] || "Cartão", total: x.total, compras: x.qtd })).sort((a, b) => b.total - a.total),
+        legenda: "total = parcial (sem pagamento de fatura) + compras no cartão, é o custo real de vida no período. parcial = dinheiro que de fato saiu de conta/carteira (inclui pagamentos de fatura). Pagamento antecipado e estorno no cartão não contam como compra.",
+      };
     }
     if (nome === "listar_lancamentos") {
       const LIMITE = 120;
